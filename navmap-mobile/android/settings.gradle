@@ -1,0 +1,18 @@
+// Minimal bare-React-Native settings (Groovy DSL, RN 0.82.1).
+// The react-native-gradle-plugin is resolved from node_modules.
+pluginManagement {
+    includeBuild("../node_modules/@react-native/gradle-plugin")
+}
+
+plugins {
+    id("com.facebook.react.settings")
+}
+
+extensions.configure(com.facebook.react.settings.ReactSettingsExtension) { ex ->
+    ex.reactNativeDir = file("../node_modules/react-native")
+    ex.useHermes = true
+}
+
+rootProject.name = 'NavMapPrototype'
+
+include(':app')

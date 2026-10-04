@@ -1,0 +1,30 @@
+// Top-level build file (Groovy DSL, RN 0.82.1 / React 19.1.1).
+// Versions mirror the RN 0.82 template: AGP 8.x, Kotlin 2.0, SDK 35.
+buildscript {
+    ext {
+        buildToolsVersion = "35.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 35
+        targetSdkVersion = 35
+        ndkVersion = "27.1.12297045"
+        kotlinVersion = "2.0.20"
+        hermesVersion = "0.82.1"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.7.2")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.20")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url("https://www.jitpack.io") }
+    }
+}

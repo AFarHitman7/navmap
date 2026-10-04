@@ -1,0 +1,32 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- Survey + GPS. CHANGE_WIFI_STATE allows requestScan; throttling stays ON. -->
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+  <!-- Camera is requested in context, only on tapping Scan QR (fallback). -->
+  <uses-permission android:name="android.permission.CAMERA" />
+
+  <application
+    android:name=".MainApplication"
+    android:label="NavMap Prototype"
+    android:usesCleartextTraffic="false">
+
+    <activity
+      android:name=".MainActivity"
+      android:exported="true"
+      android:launchMode="singleTask">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <!-- Offline anchor handoff: navmap://anchor/<venue>/<version>/<anchor> -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="navmap" android:host="anchor" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

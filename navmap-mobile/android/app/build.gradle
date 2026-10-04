@@ -1,0 +1,46 @@
+// android/app/build.gradle (Groovy DSL, RN 0.82.1).
+// applicationId com.navmapprototype matches the Kotlin package + manifests.
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+android {
+    namespace "com.navmapprototype"
+    compileSdkVersion 35
+
+    defaultConfig {
+        applicationId "com.navmapprototype"
+        minSdkVersion 24
+        targetSdkVersion 35
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+}
+
+dependencies {
+    implementation("com.facebook.react:react-android")
+    implementation("com.facebook.react:hermes-android")
+}
+
+// Native modules (webview, fs, geolocation, keychain) are autolinked by the
+// com.facebook.react Gradle plugin (GeneratePackageListTask); the local
+// WifiScanPackage is added manually in MainApplication.kt.

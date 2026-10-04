@@ -1,0 +1,202 @@
+import { describe, expect, it } from 'vitest';
+import { login, testContext, discardDb } from './helpers.js';
+
+const DRAFT = {
+  schemaVersion: 4,
+  venueId: 'demo',
+  boundary: { north: 13.1, south: 13.0, east: 80.3, west: 80.2 },
+  indoorZones: [],
+  nodes: [],
+  edges: [],
+  places: [],
+  anchors: [],
+  aps: [],
+};
+
+describe('v3 api', () => {
+  it('round-trips a boundary-only draft and publishes without images or surveys', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const anon = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3' });
+      expect(anon.statusCode).toBe(401);
+      const put = await app.inject({
+        method: 'PUT',
+        url: '/api/admin/venues/demo/draft-v3',
+        headers: { cookie },
+        payload: DRAFT,
+      });
+      expect(put.statusCode).toBe(200);
+      const get = await app.inject({
+        method: 'GET',
+        url: '/api/admin/venues/demo/draft-v3',
+        headers: { cookie },
+      });
+      expect(get.statusCode).toBe(200);
+      expect(get.json()).toMatchObject({ schemaVersion: 4, venueId: 'demo' });
+      const pub = await app.inject({
+        method: 'POST',
+        url: '/api/admin/venues/demo/publish-v3',
+        headers: { cookie },
+      });
+      expect(pub.statusCode).toBe(200);
+      expect(pub.json()).toMatchObject({ schemaVersion: 4, version: 1, profiles: [] });
+      const manifest = await app.inject({ method: 'GET', url: '/api/venues/demo/versions/1/manifest' });
+      expect(manifest.statusCode).toBe(200);
+      expect(manifest.json()).toMatchObject({ schemaVersion: 4, version: 1 });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects node samples for unknown nodes and publishes viable node profiles', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const draft = {
+        ...DRAFT,
+        indoorZones: [
+          {
+            id: 'b-a',
+            name: 'A',
+            bounds: { north: 13.08, south: 13.02, east: 80.28, west: 80.22 },
+            floors: [{ z: 0, label: 'Ground' }],
+          },
+        ],
+        nodes: [{ id: 'n1', name: 'North Lobby', lat: 13.05, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 }],
+        aps: ['AA:BB:CC:DD:EE:01', 'AA:BB:CC:DD:EE:02'],
+      };
+      expect(
+        (await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: draft })).statusCode,
+      ).toBe(200);
+      const bad = await app.inject({
+        method: 'POST',
+        url: '/api/admin/venues/demo/node-samples',
+        headers: { cookie },
+        payload: {
+          nodeId: 'nope',
+          scans: [{ nodeId: 'nope', fingerprintRevision: 1, capturedAt: 1, readings: [{ bssid: 'AA:BB:CC:DD:EE:01', rssi: -50 }] }],
+        },
+      });
+      expect(bad.statusCode).toBe(400);
+      const scans = [1, 2, 3].map((i) => ({
+        nodeId: 'n1',
+        fingerprintRevision: 1,
+        capturedAt: 1000 + i,
+        readings: [
+          { bssid: 'AA:BB:CC:DD:EE:01', rssi: -50 - i },
+          { bssid: 'AA:BB:CC:DD:EE:02', rssi: -60 },
+        ],
+      }));
+      const ok = await app.inject({
+        method: 'POST',
+        url: '/api/admin/venues/demo/node-samples',
+        headers: { cookie },
+        payload: { nodeId: 'n1', scans },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ count: 3 });
+      const pub = await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+      expect(pub.statusCode).toBe(200);
+      expect(pub.json().profiles).toHaveLength(1);
+      expect(pub.json().profiles[0]).toMatchObject({ nodeId: 'n1', scanCount: 3 });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects venue mismatch without writing to the other venue', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/admin/venues',
+        headers: { cookie },
+        payload: { name: 'Second' },
+      });
+      const otherId = (created.json() as { id: string }).id;
+      const mismatch = await app.inject({
+        method: 'PUT',
+        url: '/api/admin/venues/demo/draft-v3',
+        headers: { cookie },
+        payload: { ...DRAFT, venueId: otherId },
+      });
+      expect(mismatch.statusCode).toBe(400);
+      const other = await app.inject({
+        method: 'GET',
+        url: `/api/admin/venues/${otherId}/draft-v3`,
+        headers: { cookie },
+      });
+      expect(other.statusCode).toBe(200);
+      expect(other.json()).toMatchObject({ schemaVersion: 4, venueId: otherId, boundary: null, nodes: [] });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('round-trips named V4 nodes exactly', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const draft = {
+        ...DRAFT,
+        indoorZones: [
+          {
+            id: 'b-a',
+            name: 'A',
+            bounds: { north: 13.08, south: 13.02, east: 80.28, west: 80.22 },
+            floors: [{ z: 0, label: 'Ground' }],
+          },
+        ],
+        nodes: [
+          { id: 'n1', name: '  Lobby Desk – East  ', lat: 13.05, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 7 },
+        ],
+      };
+      const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: draft });
+      expect(put.statusCode).toBe(200);
+      const get = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3', headers: { cookie } });
+      expect(get.statusCode).toBe(200);
+      expect(get.json().nodes[0]).toMatchObject({ id: 'n1', name: '  Lobby Desk – East  ', fingerprintRevision: 7 });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('round-trips grouped paths through save, load, publish, and manifest fetch', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const draft = {
+        ...DRAFT,
+        indoorZones: [
+          {
+            id: 'b-a',
+            name: 'A',
+            bounds: { north: 13.08, south: 13.02, east: 80.28, west: 80.22 },
+            floors: [{ z: 0, label: 'Ground' }],
+          },
+        ],
+        nodes: [
+          { id: 'a', name: 'A', lat: 13.05, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+          { id: 'b', name: 'B', lat: 13.05001, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1, generated: true },
+        ],
+        edges: [{ from: 'a', to: 'b', meters: 1.12, kind: 'path' }],
+        paths: [{ id: 'corridor', name: 'Corridor', nodeIds: ['a', 'b'], controlNodeIds: ['a', 'b'] }],
+      };
+      const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: draft });
+      expect(put.statusCode).toBe(200);
+      const get = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3', headers: { cookie } });
+      expect(get.statusCode).toBe(200);
+      expect(get.json().paths).toEqual(draft.paths);
+      const pub = await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+      expect(pub.statusCode).toBe(200);
+      expect(pub.json().paths).toEqual(draft.paths);
+      const manifest = await app.inject({ method: 'GET', url: '/api/venues/demo/versions/1/manifest' });
+      expect(manifest.statusCode).toBe(200);
+      expect(manifest.json().paths).toEqual(draft.paths);
+    } finally {
+      discardDb(db);
+    }
+  });
+});

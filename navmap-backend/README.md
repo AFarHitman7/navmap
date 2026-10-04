@@ -1,0 +1,52 @@
+# NavMap V3 backend
+
+Fastify + TypeScript + SQLite backend for the unified geographic V3 map. V3 is
+this service's only supported draft and published contract; there are no V1/V2
+routes or migration paths.
+
+## Local setup
+
+```powershell
+copy .env.example .env
+# Set ADMIN_PASSWORD; optional DATA_DIR=./data, HOST=0.0.0.0, PORT=3000
+npm ci
+npm run db:init
+npm run dev
+```
+
+Default storage is `./data`: SQLite database, sessions, and immutable V3
+manifests. New databases start with one blank `demo` V3 draft. Existing local
+development content was cleared; the running backend initialized a fresh V3
+database at `DATA_DIR`.
+
+To explicitly clear local development storage later, run
+`npm run data:reset -- --confirm-v3-reset`. It prints the resolved `DATA_DIR`
+and `DB_PATH` first. If the deletion target is outside this backend workspace,
+also pass `--confirm-outside-path=<exact-canonical-target>`; no reset runs on
+server startup.
+
+## V3 API
+
+Admin login: `POST /api/admin/login`.
+
+Authenticated authoring:
+- `GET/PUT /api/admin/venues/:venueId/draft-v3`
+- `POST /api/admin/venues/:venueId/node-samples`
+- `POST /api/admin/venues/:venueId/publish-v3`
+
+Public V3 reads:
+- `GET /api/venues/:venueId/latest`
+- `GET /api/venues/:venueId/versions/:version/manifest`
+
+Draft writes may be incomplete; publish validates geographic bounds, zones,
+floors, nodes, explicit edges, anchors, and viable profiles. V3 maps use WGS84
+latitude/longitude and integer floor `z`; published manifests have no raster
+assets.
+
+## Checks
+
+```powershell
+npm test
+npm run typecheck
+npm run build
+```

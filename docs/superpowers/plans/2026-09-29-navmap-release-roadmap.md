@@ -1,0 +1,15 @@
+# NavMap Incremental Map Release Roadmap
+
+**Spec:** `docs/superpowers/specs/2026-09-29-navmap-incremental-map-publishing-design.md`
+
+This approved change spans five independently reviewable releases. Do not implement all five as one batch. Phase 1 is specified step by step in `2026-09-29-navmap-publish-baseline.md`; before executing phases 2–5, write a similarly detailed TDD plan for that release against the then-current code. The completion criteria below are fixed handoff requirements, not permission to omit tests or to assume later phases are already implemented.
+
+| Order | Independently testable release | Required result and gate |
+| --- | --- | --- |
+| 1 | Outdoor-only publish and schema v2 | An authenticated organizer publishes a boundary with no image, nodes, indoor zone, APs or surveys; web visitor and Android downloaded pack open it; old v1 snapshots and packs still work; an invalid boundary remains an editable draft. See `2026-09-29-navmap-publish-baseline.md`. |
+| 2 | Multiple indoor plans and rotatable footprints | Drawing a footprint for each outdoor entrance creates an indoor zone, entry node and explicit portal. Two entrances yield independent plans; outdoor and indoor rectangles rotate and derive area/width; editor, visitor and Android select the right zone, preserve existing geometry on edits, and reject orphaned portals. Add migration tests for existing single-indoor drafts. |
+| 3 | Free/paths routing and barriers | Per-zone free movement is default, with straight-line candidates blocked by barriers; path-only mode uses explicit edges; portals are the only cross-zone transitions. Web, Android and backend agree on route fixture IDs, distances, blocked routes and unreachable-place messages. Old v1 edge behavior remains unchanged. |
+| 4 | Licensed static background | Preview live OSM only online; opt-in capture from configured provider with documented offline redistribution rights, attribution, size/type validation and matching rotation. Save immutable digested assets and display offline on Android. Upload and blank-image fallbacks work when source is absent or fails. Never capture or prefetch `tile.openstreetmap.org` tiles. |
+| 5 | Survey-led AP registration | Android surveyor selects discovered stable APs and posts to authenticated API, then records room samples; web has no manual AP form and no AP publish gate. Partial/no surveys produce no Wi-Fi fix and do not prevent publishing. Real-device scan throttling and offline QR/manual fallbacks are verified. |
+
+**Release ordering:** Complete contract/pack compatibility before changing public snapshot shape. Preserve immutable version URLs and image SHA-256 at every phase. Review and commit only the files deliberately changed in each of the three separate Git repositories; the shared `docs/` directory is not part of any of them. Re-run backend, web and Android suites after each release. Each phase is releasable after its own cross-client tests pass; do not deploy backend v2 publications to an Android build that only understands v1.
