@@ -305,6 +305,10 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
   }
 
   function finishPathDrawing() {
+    if (stairsArmed) {
+      setError('Complete or cancel the armed stairs link before finishing the path.');
+      return;
+    }
     if (edit((d) => addDrawnPath(d, pendingPath), 'Path saved to the draft.')) {
       setPendingPath([]);
       setStairsArmed(false);
@@ -774,6 +778,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                   mode={mode}
                   vertices={pendingPath}
                   selectedPath={selectedPath}
+                  paths={draft.paths ?? []}
                   selectedConnection={selectedConnectionEdge}
                   stairsArmed={stairsArmed}
                   busy={!!busy}
@@ -781,6 +786,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                   onCancel={cancelPathDrawing}
                   onArmStairs={() => setStairsArmed((armed) => !armed)}
                   onDeletePath={deleteSelectedPath}
+                  onSelectPath={selectPath}
                   onDeleteConnection={deleteSelectedConnection}
                 />
                 <section>

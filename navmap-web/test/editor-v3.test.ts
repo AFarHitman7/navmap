@@ -4,15 +4,18 @@ import {
   addNodeAt,
   addZone,
   connectNodes,
+  disconnectNodes,
   emptyDraftV3,
   moveNode,
   nextNodeId,
+  renameNode,
   removeFloor,
   removeNode,
   removeZone,
   setBoundary,
   setNodeFloor,
   setZoneBounds,
+  updateNodeLocation,
 } from '../src/editor-v3/model';
 
 const BOUNDARY = { north: 13.1, south: 13.0, east: 80.3, west: 80.2 };
@@ -56,13 +59,14 @@ describe('editor-v3 zones', () => {
     expect(d.indoorZones[0]!.bounds.north).toBe(13.04);
   });
 
-  it('deleting a populated zone requires reassignment', () => {
+  it('deleting a populated zone requires reassignment and will not orphan grouped paths', () => {
     let d = addZone(withBoundary(), { name: 'A', bounds: ZONE_BOUNDS });
     d = addNodeAt(d, 13.05, 80.25, 'b-a', 0);
     expect(() => removeZone(d, 'b-a')).toThrow(/[Rr]eassign/);
     d = removeZone(d, 'b-a', { nodes: 'delete', edges: 'delete' });
     expect(d.indoorZones).toHaveLength(0);
     expect(d.nodes).toHaveLength(0);
+    expect(d.paths ?? []).toHaveLength(0);
   });
 });
 
@@ -84,7 +88,7 @@ describe('editor-v3 nodes', () => {
     d2 = moveNode(d2, 'n-1', 13.06, 80.26);
     expect(d2.nodes[0]).toMatchObject({ lat: 13.06, fingerprintRevision: 2 });
     d2 = setNodeFloor(d2, 'n-1', 0);
-    expect(d2.nodes[0]!.fingerprintRevision).toBe(3);
+    expect(d2.nodes[0]!.fingerprintRevision).toBe(2);
   });
 
   it('connects paths, entrances, and stairs with validation', () => {
@@ -99,6 +103,62 @@ describe('editor-v3 nodes', () => {
     d = connectNodes(d, 'n-3', 'n-1', 'entrance', 10);
     expect(d.edges).toHaveLength(2);
     expect(() => connectNodes(d, 'n-1', 'n-1', 'path', 1)).toThrow(/different/);
+  });
+
+  it('routes legacy ordinary Connect through geometric reconciliation', () => {
+    let d = addZone(withBoundary(), { name: 'A', bounds: ZONE_BOUNDS });
+    d = addNodeAt(d, 13.05, 80.2499, 'b-a', 0);
+    d = addNodeAt(d, 13.05, 80.2501, 'b-a', 0);
+    d = addNodeAt(d, 13.0499, 80.25, 'b-a', 0);
+    d = addNodeAt(d, 13.0501, 80.25, 'b-a', 0);
+
+    d = connectNodes(d, 'n-1', 'n-2', 'path');
+    d = connectNodes(d, 'n-3', 'n-4', 'path');
+
+    const junction = d.nodes.find((node) => node.generated && node.lat === 13.05 && node.lng === 80.25);
+    expect(junction).toBeDefined();
+    expect(d.edges.some((edge) => [edge.from, edge.to].includes('n-1') && [edge.from, edge.to].includes('n-2'))).toBe(false);
+    expect(d.edges.filter((edge) => edge.from === junction!.id || edge.to === junction!.id)).toHaveLength(4);
+  });
+
+  it('rejects manual legacy path moves that would create unresolved crossings', () => {
+    let d = addZone(withBoundary(), { name: 'A', bounds: ZONE_BOUNDS });
+    d = addNodeAt(d, 13.05, 80.2499, 'b-a', 0);
+    d = addNodeAt(d, 13.05, 80.2501, 'b-a', 0);
+    d = addNodeAt(d, 13.0499, 80.2502, 'b-a', 0);
+    d = addNodeAt(d, 13.0501, 80.2502, 'b-a', 0);
+    d = connectNodes(d, 'n-1', 'n-2', 'path');
+    d = connectNodes(d, 'n-3', 'n-4', 'path');
+    const before = structuredClone(d);
+
+    expect(() => moveNode(d, 'n-3', 13.0499, 80.25)).toThrow(/disconnect|delete|connected/i);
+    expect(d).toEqual(before);
+  });
+
+  it('rejects connected ungrouped form and floor moves atomically while allowing renames and no-op updates', () => {
+    let d = addZone(withBoundary(), { name: 'A', bounds: ZONE_BOUNDS, floors: [{ z: 0, label: 'Ground' }, { z: 1, label: 'Level 1' }] });
+    d = addNodeAt(d, 13.05, 80.2499, 'b-a', 0);
+    d = addNodeAt(d, 13.05, 80.2501, 'b-a', 0);
+    d = connectNodes(d, 'n-1', 'n-2', 'path');
+    const before = structuredClone(d);
+
+    const renamed = renameNode(d, 'n-1', 'Renamed connected node');
+    expect(renamed.nodes.find((n) => n.id === 'n-1')).toMatchObject({ name: 'Renamed connected node', fingerprintRevision: 1 });
+
+    const noop = updateNodeLocation(d, 'n-1', 13.05, 80.2499, 'b-a', 0);
+    expect(noop).toEqual(d);
+    expect(() => updateNodeLocation(d, 'n-1', 13.05001, 80.2499, 'b-a', 0)).toThrow(/disconnect|reconnect|connected/i);
+    expect(() => setNodeFloor(d, 'n-1', 1)).toThrow(/disconnect|reconnect|connected/i);
+    expect(d).toEqual(before);
+  });
+
+  it('rejects disconnecting an edge owned by grouped path metadata', () => {
+    let d = addZone(withBoundary(), { name: 'A', bounds: ZONE_BOUNDS });
+    d = addNodeAt(d, 13.05, 80.2499, 'b-a', 0);
+    d = addNodeAt(d, 13.05, 80.2501, 'b-a', 0);
+    d = { ...d, edges: [{ from: 'n-1', to: 'n-2', meters: 2, kind: 'path' }], paths: [{ id: 'p', name: 'P', nodeIds: ['n-1', 'n-2'] }] };
+
+    expect(() => disconnectNodes(d, 'n-1', 'n-2')).toThrow(/drawn path|grouped/i);
   });
 
   it('refuses to delete nodes with references', () => {

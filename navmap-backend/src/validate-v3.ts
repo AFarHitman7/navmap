@@ -1,5 +1,6 @@
 import type { DraftV3 } from './draft.js';
 import { containsBounds, containsPoint, rectsOverlap } from './geo-v3.js';
+import { intersectSegments } from './path-geometry.js';
 import { validatePathGroups } from './path-validation.js';
 
 /**
@@ -92,6 +93,42 @@ export function validatePublishV3(draft: DraftV3): string[] {
       }
     }
   }
+  errors.push(...validateUnresolvedPathGeometry(draft));
   errors.push(...validatePathGroups(draft));
+  return errors;
+}
+
+type Point = { lat: number; lng: number; zoneId: string | null; z: number; id: string };
+type Segment = { edge: string; a: Point; b: Point };
+
+function validateUnresolvedPathGeometry(draft: DraftV3): string[] {
+  const errors: string[] = [];
+  const nodeById = new Map(draft.nodes.map((node) => [node.id, node]));
+  const segments = draft.edges.flatMap((edge): Segment[] => {
+    if (edge.kind !== 'path') return [];
+    const a = nodeById.get(edge.from);
+    const b = nodeById.get(edge.to);
+    if (!a || !b || (a.zoneId ?? null) !== (b.zoneId ?? null) || a.z !== b.z) return [];
+    return [{ edge: `${edge.from}->${edge.to}`, a, b }];
+  });
+  for (let i = 0; i < segments.length; i++) {
+    for (let j = i + 1; j < segments.length; j++) {
+      const first = segments[i]!;
+      const second = segments[j]!;
+      if ((first.a.zoneId ?? null) !== (second.a.zoneId ?? null) || first.a.z !== second.a.z) continue;
+      const intersection = intersectSegments(first.a, first.b, second.a, second.b);
+      if (!intersection) continue;
+      if (intersection.kind === 'overlap') {
+        errors.push(`path edges ${first.edge} and ${second.edge} overlap without topology resolution`);
+        continue;
+      }
+      const touchingFirstId =
+        intersection.aFraction === 0 ? first.a.id : intersection.aFraction === 1 ? first.b.id : null;
+      const touchingSecondId =
+        intersection.bFraction === 0 ? second.a.id : intersection.bFraction === 1 ? second.b.id : null;
+      if (touchingFirstId !== null && touchingFirstId === touchingSecondId) continue;
+      errors.push(`path edges ${first.edge} and ${second.edge} cross without a shared junction`);
+    }
+  }
   return errors;
 }

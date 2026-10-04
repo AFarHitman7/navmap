@@ -212,6 +212,29 @@ describe('MapCanvasV3', () => {
     expect(onEdgeClick).toHaveBeenCalledWith('n-out', 'n-a0');
   });
 
+  it('filters floor-local path preview markers and stretches while keeping visible stair landing indicators', async () => {
+    const leaflet = captureLeaflet();
+    render(
+      <MapCanvasV3
+        draft={fixture as never}
+        selectedZoneId={null}
+        mode="draw-path"
+        zoneFloorVisibility={{ 'b-a': 0, 'b-b': 'hidden' }}
+        showOutdoors={false}
+        pathPreview={[
+          { lat: 13.05, lng: 80.245, zoneId: 'b-a', z: 0, nodeId: 'n-a0' },
+          { lat: 13.05, lng: 80.245, zoneId: 'b-a', z: 1, nodeId: 'n-a1', incomingKind: 'stairs' },
+          { lat: 13.056, lng: 80.2485, zoneId: 'b-a', z: 1 },
+        ]}
+      />,
+    );
+    await screen.findByTestId('leaflet-map-v3');
+
+    expect(leaflet.markers.some((marker) => marker.getElement()?.getAttribute('data-preview-transition') === '1')).toBe(true);
+    expect(leaflet.polylines.some((line) => line.options.dashArray === '6 6')).toBe(false);
+    expect(leaflet.markers.filter((marker) => marker.getElement()?.getAttribute('data-preview-point') === '1')).toHaveLength(1);
+  });
+
   it('keeps edge clicks from bubbling to the map so no stray vertex is added', async () => {
     const leaflet = captureLeaflet();
     const onPointClick = vi.fn();

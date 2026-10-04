@@ -8,7 +8,7 @@ import {
   type PlaceV3,
 } from '../contract-v3';
 import { containsBounds, containsPoint, distanceMeters, rectsOverlap } from '../geo-v3';
-import { isGroupedPathNode, movePathNode } from './paths';
+import { connectLegacyPathNodes, isGroupedPathNode, movePathNode } from './paths';
 
 export function emptyDraftV3(venueId = 'demo'): DraftV3 {
   return {
@@ -189,6 +189,7 @@ export function removeZone(
     indoorZones: draft.indoorZones.filter((z) => z.id !== zoneId),
     nodes: draft.nodes.filter((n) => n.zoneId !== zoneId),
     edges: draft.edges.filter((e) => !doomed.has(e.from) && !doomed.has(e.to)),
+    paths: (draft.paths ?? []).filter((path) => path.nodeIds.every((id) => !doomed.has(id))),
   };
 }
 
@@ -216,9 +217,12 @@ export function updateNodeLocation(
   zoneId?: string | null,
   z?: number,
 ): DraftV3 {
-  if (isGroupedPathNode(draft, id)) return movePathNode(draft, id, { lat, lng, zoneId: zoneId ?? zoneMembership(draft, lat, lng), z: z ?? requireNode(draft, id).z });
-  requireNode(draft, id);
+  const current = requireNode(draft, id);
+  if (isGroupedPathNode(draft, id)) return movePathNode(draft, id, { lat, lng, zoneId: zoneId ?? zoneMembership(draft, lat, lng), z: z ?? current.z });
   const resolved = validateNodeLocation(draft, lat, lng, zoneId, z);
+  const changed = current.lat !== lat || current.lng !== lng || current.zoneId !== resolved.zoneId || current.z !== resolved.z;
+  if (!changed) return draft;
+  if (hasIncidentConnection(draft, id)) throw new Error('Disconnect or delete connected edges before moving this point.');
   const linkedPlace = draft.places.find((p) => p.nodeId === id);
   if (linkedPlace && resolved.zoneId === null) {
     throw new Error(`Delete or reassign the place ${linkedPlace.name} before moving this node outdoors`);
@@ -236,9 +240,20 @@ export function moveNode(draft: DraftV3, id: string, lat: number, lng: number): 
     return movePathNode(draft, id, { lat, lng, zoneId: node.zoneId, z: node.z });
   }
   const boundary = requireBoundary(draft);
-  if (!draft.nodes.some((n) => n.id === id)) throw new Error(`Unknown node ${id}`);
+  const node = requireNode(draft, id);
+  if (node.lat === lat && node.lng === lng) return draft;
+  if (hasIncidentConnection(draft, id)) throw new Error('Disconnect or delete connected edges before moving this point.');
   if (!containsPoint(boundary, lat, lng)) throw new Error('Nodes must be inside the outdoor boundary');
   return bumpRevision({ ...draft, nodes: draft.nodes.map((n) => (n.id === id ? { ...n, lat, lng } : n)) }, id);
+}
+
+function edgeKey(from: string, to: string): string {
+  return JSON.stringify([from, to].sort());
+}
+
+function hasIncidentConnection(draft: DraftV3, id: string): boolean {
+  const groupedKeys = new Set((draft.paths ?? []).flatMap((path) => path.nodeIds.slice(1).map((nodeId, index) => edgeKey(path.nodeIds[index]!, nodeId))));
+  return draft.edges.some((edge) => (edge.from === id || edge.to === id) && !groupedKeys.has(edgeKey(edge.from, edge.to)));
 }
 
 /** Where would this point belong? Used to preview a move across a zone edge. */
@@ -250,6 +265,8 @@ export function previewMove(draft: DraftV3, lat: number, lng: number): string | 
 export function setNodeFloor(draft: DraftV3, id: string, z: number): DraftV3 {
   const node = requireNode(draft, id);
   if (isGroupedPathNode(draft, id)) return movePathNode(draft, id, { lat: node.lat, lng: node.lng, zoneId: node.zoneId, z });
+  if (node.z === z) return draft;
+  if (hasIncidentConnection(draft, id)) throw new Error('Disconnect or delete connected edges before moving this point.');
   if (node.zoneId === null) {
     if (z !== 0) throw new Error('Outdoor points use the ground level');
   } else {
@@ -344,10 +361,15 @@ export function connectNodes(
       ? distanceMeters(fromNode.lat, fromNode.lng, toNode.lat, toNode.lng)
       : Math.abs(toNode.z - fromNode.z) * 4);
   if (!Number.isFinite(length) || length <= 0) throw new Error('Choose two existing points and a positive distance');
+  if (resolved === 'path') return connectLegacyPathNodes(draft, from, to, length);
   return { ...draft, edges: [...draft.edges, { from, to, meters: length, kind: resolved }] };
 }
 
 export function disconnectNodes(draft: DraftV3, from: string, to: string): DraftV3 {
+  const key = edgeKey(from, to);
+  if ((draft.paths ?? []).some((path) => path.nodeIds.slice(1).some((id, index) => edgeKey(path.nodeIds[index]!, id) === key))) {
+    throw new Error('This connection belongs to a grouped drawn path; delete the drawn path instead.');
+  }
   return {
     ...draft,
     edges: draft.edges.filter((e) => !((e.from === from && e.to === to) || (e.from === to && e.to === from))),

@@ -52,6 +52,10 @@ function transitionLabel(edgeKind: string, hidden: NodeV3): string {
   return `${label} to floor ${hidden.z}`;
 }
 
+function isPreviewVisible(vertex: PathVertex, visibility?: ZoneFloorVisibility, showOutdoors = true): boolean {
+  return isNodeVisible({ zoneId: vertex.zoneId, z: vertex.z }, visibility, showOutdoors);
+}
+
 /** One geographic map: boundary + every indoor zone + all nodes. No second canvas. */
 export function MapCanvasV3(props: MapCanvasV3Props) {
   const { draft, selectedZoneId, selectedNodeId, mode = 'navigate', disabled = false, floorFilter = null,
@@ -191,16 +195,35 @@ export function MapCanvasV3(props: MapCanvasV3Props) {
     };
     for (let i = 0; i < preview.length; i++) {
       const vertex = preview[i]!;
+      const visible = isPreviewVisible(vertex, zoneFloorVisibility, showOutdoors);
       if (i > 0 && vertex.incomingKind === 'stairs') {
         flushPreview();
         const previous = preview[i - 1]!;
-        L.polyline([[previous.lat, previous.lng], [vertex.lat, vertex.lng]], { color: '#7c3aed', weight: 4, dashArray: '4 4', interactive: false }).addTo(layer);
+        const previousVisible = isPreviewVisible(previous, zoneFloorVisibility, showOutdoors);
+        if (previousVisible && visible) L.polyline([[previous.lat, previous.lng], [vertex.lat, vertex.lng]], { color: '#7c3aed', weight: 4, dashArray: '4 4', interactive: false }).addTo(layer);
+        else if (previousVisible !== visible) {
+          const shown = previousVisible ? previous : vertex;
+          const hidden = previousVisible ? vertex : previous;
+          const marker = L.marker([shown.lat, shown.lng], {
+            title: 'Path preview transition',
+            interactive: false,
+            icon: L.divIcon({ className: 'transition-marker-icon', iconSize: [112, 24], iconAnchor: [0, 12], html: `<span>Stairs to floor ${hidden.z}</span>` }),
+          }).addTo(layer);
+          marker.getElement()?.setAttribute('data-preview-transition', '1');
+        }
       }
-      previewStretch.push([vertex.lat, vertex.lng]);
+      if (visible) previewStretch.push([vertex.lat, vertex.lng]);
+      else flushPreview();
     }
     flushPreview();
     for (const vertex of preview) {
-      L.circleMarker([vertex.lat, vertex.lng], { radius: 4, color: '#0f766e', weight: 2, fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(layer);
+      if (!isPreviewVisible(vertex, zoneFloorVisibility, showOutdoors)) continue;
+      const marker = L.marker([vertex.lat, vertex.lng], {
+        title: 'Path preview point',
+        interactive: false,
+        icon: L.divIcon({ className: 'preview-point-icon', iconSize: [8, 8], iconAnchor: [4, 4], html: '<span aria-hidden="true"></span>' }),
+      }).addTo(layer);
+      marker.getElement()?.setAttribute('data-preview-point', '1');
     }
     // Route: break at floor transitions so stairs never read as a flat walk.
     let stretch: L.LatLngTuple[] = [];

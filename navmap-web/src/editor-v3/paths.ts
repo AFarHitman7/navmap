@@ -30,7 +30,11 @@ export function addDrawnPath(draft: DraftV3, vertices: PathVertex[], name?: stri
   const controlNodeIds: string[] = [];
 
   const resolved = vertices.map((vertex) => resolveVertex(work, vertex));
-  for (let i = 1; i < resolved.length; i++) validateConnection(resolved[i - 1]!, resolved[i]!, vertices[i]!.incomingKind ?? 'path');
+  for (let i = 1; i < resolved.length; i++) {
+    const kind = vertices[i]!.incomingKind ?? 'path';
+    validateConnection(resolved[i - 1]!, resolved[i]!, kind);
+    if (kind === 'path') validateOrdinarySegmentMembership(work, resolved[i - 1]!, resolved[i]!);
+  }
 
   let previous = ensureNode(work, resolved[0]!);
   nodeIds.push(previous.id);
@@ -42,6 +46,7 @@ export function addDrawnPath(draft: DraftV3, vertices: PathVertex[], name?: stri
     const current = ensureNode(work, currentVertex);
     controlNodeIds.push(current.id);
     if (kind === 'stairs') {
+      if (findEdge(work, previous.id, current.id)) throw new Error('Cannot create stairs over an existing transition connection; delete the existing connection first.');
       addUniqueEdge(work, previous.id, current.id, 'stairs', stairLength(previous, current));
       nodeIds.push(current.id);
     } else {
@@ -64,6 +69,7 @@ export function addDrawnPath(draft: DraftV3, vertices: PathVertex[], name?: stri
 
 function rejectOverlapWithOrdinarySegments(draft: WorkDraft, from: NodeV3, to: NodeV3): void {
   for (const segment of ordinarySegments(draft)) {
+    if (!sameMembership(from, segment.a)) continue;
     const intersection = intersectSegments(from, to, segment.a, segment.b);
     if (intersection?.kind === 'overlap') throw new Error('Overlapping path segments are ambiguous. Draw separate non-overlapping paths.');
   }
@@ -98,19 +104,32 @@ export function movePathNode(draft: DraftV3, id: string, location: { lat: number
   const paths = (draft.paths ?? []).filter((path) => path.nodeIds.includes(id));
   if (!paths.length) throw new Error(`Node ${id} is not part of a drawn path`);
   const node = requireNode(draft, id);
-  if (paths.length > 1 && (node.lat !== location.lat || node.lng !== location.lng || node.zoneId !== location.zoneId || node.z !== location.z)) {
+  const changed = node.lat !== location.lat || node.lng !== location.lng || node.zoneId !== location.zoneId || node.z !== location.z;
+  if (paths.length > 1 && changed) {
     throw new Error('Cannot move a shared junction; delete or redraw one of its paths first.');
   }
   validateLocation(draft, location.lat, location.lng, location.zoneId, location.z);
 
   const path = paths[0]!;
-  const controls = recoverPathControls(draft, path, id);
-  const movedControlIndex = controls.findIndex((control) => control.nodeId === id);
-  const affectedInteriorIds = affectedInteriorNodeIds(path, controls, movedControlIndex);
+  if (changed && hasExternalIncidentConnection(draft, id, path)) {
+    throw new Error('Disconnect or delete external connections before moving this path point.');
+  }
+  const initialControls = recoverPathControls(draft, path, id);
+  const movedControlIndexes = initialControls
+    .map((control, index) => (control.nodeId === id ? index : -1))
+    .filter((index) => index >= 0);
+  const affectedInteriorIds = new Set<string>();
+  for (const movedControlIndex of movedControlIndexes) {
+    for (const interiorId of affectedInteriorNodeIds(path, initialControls, movedControlIndex)) {
+      affectedInteriorIds.add(interiorId);
+    }
+  }
+  const controls = recoverPathControls(draft, path, id, affectedInteriorIds);
   const updatedNodes = draft.nodes.map((n) =>
     n.id === id ? { ...n, ...location, fingerprintRevision: n.fingerprintRevision + 1 } : n,
   );
   const updatedDraft = { ...draft, nodes: updatedNodes };
+  validateIncidentEdges(updatedDraft, id, path);
   const vertices = controls.map((control, index) => {
     const nodeId = control.nodeId;
     const n = updatedNodes.find((item) => item.id === nodeId)!;
@@ -126,13 +145,34 @@ export function movePathNode(draft: DraftV3, id: string, location: { lat: number
   }
   const rebuilt = addDrawnPath({ ...stripped, nodes: [...keptNodes.values()] }, vertices, path.name);
   const newPath = rebuilt.paths!.at(-1)!;
+  const controlNodeIds = desiredControlNodeIds(path, newPath, id);
   return {
     ...rebuilt,
-    paths: [...rebuilt.paths!.filter((p) => p.id !== newPath.id), { ...newPath, id: path.id }],
+    paths: [...rebuilt.paths!.filter((p) => p.id !== newPath.id), { ...newPath, id: path.id, controlNodeIds }],
   };
 }
 
-function recoverPathControls(draft: DraftV3, path: PathV3, movedId: string): RecoveredControl[] {
+function desiredControlNodeIds(oldPath: PathV3, newPath: PathV3, movedId: string): string[] | undefined {
+  if (!oldPath.controlNodeIds) return newPath.controlNodeIds;
+  const eligible = new Set(oldPath.controlNodeIds);
+  if (newPath.nodeIds.includes(movedId)) eligible.add(movedId);
+  const remainingOccurrences = new Map<string, number>();
+  for (const id of oldPath.controlNodeIds) remainingOccurrences.set(id, (remainingOccurrences.get(id) ?? 0) + 1);
+  if (!oldPath.controlNodeIds.includes(movedId) && newPath.nodeIds.includes(movedId)) {
+    remainingOccurrences.set(movedId, (remainingOccurrences.get(movedId) ?? 0) + 1);
+  }
+  const controls: string[] = [];
+  for (const id of newPath.nodeIds) {
+    if (!eligible.has(id)) continue;
+    const remaining = remainingOccurrences.get(id) ?? 0;
+    if (remaining <= 0) continue;
+    controls.push(id);
+    remainingOccurrences.set(id, remaining - 1);
+  }
+  return controls;
+}
+
+function recoverPathControls(draft: DraftV3, path: PathV3, movedId: string, affectedInteriorIds?: Set<string>): RecoveredControl[] {
   const controlIndexes: number[] = [];
   const explicitControlIds = path.controlNodeIds ?? [];
   for (let i = 0; i < path.nodeIds.length; i++) {
@@ -142,6 +182,7 @@ function recoverPathControls(draft: DraftV3, path: PathV3, movedId: string): Rec
       i === path.nodeIds.length - 1 ||
       explicitControlIds.includes(nodeId) ||
       nodeId === movedId ||
+      (affectedInteriorIds !== undefined && !affectedInteriorIds.has(nodeId)) ||
       isStructuralPathNode(draft, path, i, explicitControlIds.length > 0)
     ) {
       controlIndexes.push(i);
@@ -166,6 +207,7 @@ function isStructuralPathNode(draft: DraftV3, path: PathV3, index: number, hasEx
   const previousKind = edgeKind(draft, previousId, nodeId);
   const nextKind = edgeKind(draft, nodeId, nextId);
   if (previousKind === 'stairs' || nextKind === 'stairs') return true;
+  if (hasExternalIncidentEdge(draft, nodeId, previousId, nextId)) return true;
   if (hasExplicitControls) return false;
   const previous = requireNode(draft, previousId);
   const next = requireNode(draft, nextId);
@@ -181,6 +223,35 @@ function kindAcrossSpan(draft: DraftV3, path: PathV3, fromIndex: number, toIndex
 
 function edgeKind(draft: DraftV3, from: string, to: string): EdgeV3['kind'] {
   return draft.edges.find((edge) => edgeKey(edge.from, edge.to) === edgeKey(from, to))?.kind ?? 'path';
+}
+
+function hasExternalIncidentEdge(draft: DraftV3, nodeId: string, previousId: string, nextId: string): boolean {
+  const adjacent = new Set([edgeKey(previousId, nodeId), edgeKey(nodeId, nextId)]);
+  return draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && !adjacent.has(edgeKey(edge.from, edge.to)));
+}
+
+function hasExternalIncidentConnection(draft: DraftV3, nodeId: string, path: PathV3): boolean {
+  const routeEdges = new Set(routeKeys(path.nodeIds));
+  return draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && !routeEdges.has(edgeKey(edge.from, edge.to)));
+}
+
+function validateIncidentEdges(draft: DraftV3, nodeId: string, path: PathV3): void {
+  const routeEdges = new Set(routeKeys(path.nodeIds));
+  for (const edge of draft.edges) {
+    if (edge.from !== nodeId && edge.to !== nodeId) continue;
+    if (routeEdges.has(edgeKey(edge.from, edge.to))) continue;
+    const from = requireNode(draft, edge.from);
+    const to = requireNode(draft, edge.to);
+    if (edge.kind === 'path' && !sameMembership(from, to)) throw new Error('Cannot move path point: incident path connection must stay in the same zone and floor.');
+    if (edge.kind === 'entrance') {
+      const outdoorIndoor = (from.zoneId === null) !== (to.zoneId === null);
+      const indoor = from.zoneId === null ? to : from;
+      if (!outdoorIndoor || indoor.z !== 0) throw new Error('Cannot move path point: incident entrance connection would be invalid.');
+    }
+    if ((edge.kind === 'stairs' || edge.kind === 'elevator') && (from.zoneId === null || from.zoneId !== to.zoneId || from.z === to.z)) {
+      throw new Error('Cannot move path point: incident transition connection would be invalid.');
+    }
+  }
 }
 
 function affectedInteriorNodeIds(path: PathV3, controls: RecoveredControl[], movedControlIndex: number): Set<string> {
@@ -227,12 +298,20 @@ function validateLocation(draft: DraftV3, lat: number, lng: number, zoneId: stri
   if (!draft.boundary || !containsPoint(draft.boundary, lat, lng)) throw new Error('Path points must be inside the outdoor boundary');
   if (zoneId === null) {
     if (z !== 0) throw new Error('Outdoor path points use the ground level');
+    if (draft.indoorZones.some((zone) => containsPoint(zone.bounds, lat, lng))) throw new Error('Outdoor path points cannot lie inside indoor zones');
     return;
   }
   const zone = draft.indoorZones.find((item) => item.id === zoneId);
   if (!zone) throw new Error(`Unknown zone ${zoneId}`);
   if (!containsPoint(zone.bounds, lat, lng)) throw new Error(`Point is outside zone ${zone.name}`);
   if (!zone.floors.some((floor) => floor.z === z)) throw new Error(`Zone ${zone.name} has no floor ${z}`);
+}
+
+function validateOrdinarySegmentMembership(draft: DraftV3, from: PathVertex, to: PathVertex): void {
+  if (from.zoneId !== null || to.zoneId !== null) return;
+  for (const zone of draft.indoorZones) {
+    if (segmentIntersectsBounds(from, to, zone.bounds)) throw new Error('Outdoor path segments cannot enter indoor zones');
+  }
 }
 
 function validateConnection(from: PathVertex, to: PathVertex, kind: 'path' | 'stairs'): void {
@@ -261,6 +340,7 @@ function addOrdinarySegment(draft: WorkDraft, from: NodeV3, to: NodeV3, currentN
   const splitIds = new Map<number, string>([[0, from.id], [1, to.id]]);
   for (const segment of ordinarySegments(draft)) {
     if (edgeKey(segment.from, segment.to) === edgeKey(from.id, to.id)) continue;
+    if (!sameMembership(from, segment.a)) continue;
     const intersection = intersectSegments(from, to, segment.a, segment.b);
     if (!intersection) continue;
     if (intersection.kind === 'overlap') throw new Error('Overlapping path segments are ambiguous. Draw separate non-overlapping paths.');
@@ -279,6 +359,34 @@ function addOrdinarySegment(draft: WorkDraft, from: NodeV3, to: NodeV3, currentN
     if (a.id !== b.id) addUniqueEdge(draft, a.id, b.id, 'path', distanceMeters(a.lat, a.lng, b.lat, b.lng));
   }
   return ids;
+}
+
+export function connectLegacyPathNodes(draft: DraftV3, fromId: string, toId: string, meters?: number): DraftV3 {
+  const work = cloneDraft(draft);
+  const from = requireNode(work, fromId);
+  const to = requireNode(work, toId);
+  validateOrdinarySegmentMembership(work, from, to);
+  rejectOverlapWithOrdinarySegments(work, from, to);
+  const chain = addOrdinarySegment(work, from, to);
+  if (meters !== undefined) {
+    const direct = findEdge(work, fromId, toId);
+    if (direct) direct.meters = meters;
+    else distributeMeters(work, chain, meters);
+  }
+  return work;
+}
+
+function distributeMeters(draft: WorkDraft, chain: string[], meters: number): void {
+  const links = chain.slice(1).map((to, index) => {
+    const a = requireNode(draft, chain[index]!);
+    const b = requireNode(draft, to);
+    return { key: edgeKey(a.id, b.id), length: distanceMeters(a.lat, a.lng, b.lat, b.lng) };
+  });
+  const total = links.reduce((sum, link) => sum + link.length, 0);
+  for (const link of links) {
+    const edge = draft.edges.find((candidate) => edgeKey(candidate.from, candidate.to) === link.key);
+    if (edge) edge.meters = total > 0 ? (meters * link.length) / total : meters / links.length;
+  }
 }
 
 function isStairOnlyNode(draft: WorkDraft, id: string): boolean {
@@ -327,7 +435,35 @@ function addUniqueEdge(draft: WorkDraft, from: string, to: string, kind: EdgeV3[
   if (from === to) return;
   if (!Number.isFinite(meters) || meters <= 0) throw new Error('Path edges need a positive distance');
   const key = edgeKey(from, to);
-  if (!draft.edges.some((edge) => edgeKey(edge.from, edge.to) === key)) draft.edges.push({ from, to, meters, kind });
+  const existing = draft.edges.find((edge) => edgeKey(edge.from, edge.to) === key);
+  if (existing) {
+    if (existing.kind !== kind) throw new Error(`Existing ${existing.kind} connection conflicts with new ${kind} connection`);
+    return;
+  }
+  draft.edges.push({ from, to, meters, kind });
+}
+
+function findEdge(draft: DraftV3, from: string, to: string): EdgeV3 | undefined {
+  const key = edgeKey(from, to);
+  return draft.edges.find((edge) => edgeKey(edge.from, edge.to) === key);
+}
+
+function sameMembership(a: Pick<NodeV3, 'zoneId' | 'z'>, b: Pick<NodeV3, 'zoneId' | 'z'>): boolean {
+  return (a.zoneId ?? null) === (b.zoneId ?? null) && a.z === b.z;
+}
+
+function segmentIntersectsBounds(a: GeoPoint, b: GeoPoint, bounds: { north: number; south: number; east: number; west: number }): boolean {
+  if (containsPoint(bounds, a.lat, a.lng) || containsPoint(bounds, b.lat, b.lng)) return true;
+  const corners = [
+    { lat: bounds.south, lng: bounds.west },
+    { lat: bounds.south, lng: bounds.east },
+    { lat: bounds.north, lng: bounds.east },
+    { lat: bounds.north, lng: bounds.west },
+  ];
+  for (let i = 0; i < corners.length; i++) {
+    if (intersectSegments(a, b, corners[i]!, corners[(i + 1) % corners.length]!)) return true;
+  }
+  return false;
 }
 
 function appendChain(nodeIds: string[], chain: string[]): void {

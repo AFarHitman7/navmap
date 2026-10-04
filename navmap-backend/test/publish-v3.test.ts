@@ -154,6 +154,84 @@ describe('validatePublishV3', () => {
     expect(joined).toMatch(/missing-control.*control.*c.*sequence/);
     expect(joined).toMatch(/wrong-order.*control.*order/);
   });
+
+  it('rejects unresolved same-floor path crossings and overlaps but allows different-floor crossings', () => {
+    const crossing: DraftV3 = {
+      ...base(),
+      nodes: [
+        { id: 'a', name: 'A', lat: 13.05, lng: 80.2499, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'b', name: 'B', lat: 13.05, lng: 80.2501, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'c', name: 'C', lat: 13.0499, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'd', name: 'D', lat: 13.0501, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      ],
+      edges: [
+        { from: 'a', to: 'b', meters: 2, kind: 'path' },
+        { from: 'c', to: 'd', meters: 2, kind: 'path' },
+      ],
+    };
+    expect(validatePublishV3(crossing).join(';')).toMatch(/cross|intersection/i);
+
+    const overlap: DraftV3 = {
+      ...crossing,
+      nodes: [
+        { id: 'a', name: 'A', lat: 13.05, lng: 80.2499, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'b', name: 'B', lat: 13.05, lng: 80.2501, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'c', name: 'C', lat: 13.05, lng: 80.24995, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'd', name: 'D', lat: 13.05, lng: 80.25005, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      ],
+    };
+    expect(validatePublishV3(overlap).join(';')).toMatch(/overlap/i);
+
+    const differentFloor: DraftV3 = { ...crossing, nodes: crossing.nodes.map((node) => (node.id === 'c' || node.id === 'd' ? { ...node, z: 1 } : node)) };
+    expect(validatePublishV3(differentFloor)).toEqual([]);
+  });
+
+  it('rejects coincident endpoints that share coordinates but not a node', () => {
+    const d: DraftV3 = {
+      ...base(),
+      nodes: [
+        { id: 'a', name: 'A', lat: 13.05, lng: 80.2499, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'b', name: 'B', lat: 13.05, lng: 80.2501, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'c', name: 'C', lat: 13.05, lng: 80.2501, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+        { id: 'd', name: 'D', lat: 13.0501, lng: 80.2501, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      ],
+      edges: [
+        { from: 'a', to: 'b', meters: 2, kind: 'path' },
+        { from: 'c', to: 'd', meters: 2, kind: 'path' },
+      ],
+    };
+    expect(validatePublishV3(d).join(';')).toMatch(/cross|junction|shared/i);
+  });
+
+  it('uses metre-scale geometry for unresolved path validation near endpoints and tiny segments', () => {
+    const withEdges = (nodes: DraftV3['nodes'], edges: DraftV3['edges']): DraftV3 => ({ ...base(), nodes, edges });
+    const shortSeparated = withEdges([
+      { id: 'a', name: 'A', lat: 13.05, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'b', name: 'B', lat: 13.05, lng: 80.2500005, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'c', name: 'C', lat: 13.050001, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'd', name: 'D', lat: 13.050001, lng: 80.2500005, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+    ], [{ from: 'a', to: 'b', meters: 0.053, kind: 'path' }, { from: 'c', to: 'd', meters: 0.053, kind: 'path' }]);
+    expect(validatePublishV3(shortSeparated)).toEqual([]);
+
+    const shortCrossing = withEdges([
+      { id: 'a', name: 'A', lat: 13.05, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'b', name: 'B', lat: 13.05, lng: 80.2500005, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'c', name: 'C', lat: 13.0499998, lng: 80.25000025, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'd', name: 'D', lat: 13.0500002, lng: 80.25000025, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+    ], [{ from: 'a', to: 'b', meters: 0.053, kind: 'path' }, { from: 'c', to: 'd', meters: 0.045, kind: 'path' }]);
+    expect(validatePublishV3(shortCrossing).join(';')).toMatch(/cross|junction/i);
+
+    const overlap = withEdges([
+      { id: 'a', name: 'A', lat: 13.05, lng: 80.25, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'b', name: 'B', lat: 13.05, lng: 80.250001, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'c', name: 'C', lat: 13.05, lng: 80.2500002, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+      { id: 'd', name: 'D', lat: 13.05, lng: 80.2500008, z: 0, zoneId: 'b-a', fingerprintRevision: 1 },
+    ], [{ from: 'a', to: 'b', meters: 0.107, kind: 'path' }, { from: 'c', to: 'd', meters: 0.064, kind: 'path' }]);
+    expect(validatePublishV3(overlap).join(';')).toMatch(/overlap/i);
+
+    const floorIsolated: DraftV3 = { ...shortCrossing, nodes: shortCrossing.nodes.map((node) => (node.id === 'c' || node.id === 'd' ? { ...node, z: 1 } : node)) };
+    expect(validatePublishV3(floorIsolated)).toEqual([]);
+  });
 });
 
 describe('publishV3', () => {

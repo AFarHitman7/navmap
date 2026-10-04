@@ -23,6 +23,7 @@ vi.mock('../src/MapCanvasV3', () => ({
     <button type="button" onClick={() => onPointClick?.({ lat: 13.052, lng: 80.247 })}>Mock path corner</button>
     <button type="button" onClick={() => onNodeClick?.('n-a0b')}>Mock path end</button>
     <button type="button" onClick={() => onNodeClick?.('n-a1')}>Mock upper landing</button>
+    <button type="button" onClick={() => onNodeClick?.('n-a1b')}>Mock unconnected upper landing</button>
     <button type="button" onClick={() => onPointClick?.({ lat: 13.056, lng: 80.2485 })}>Mock upper path corner</button>
     <button type="button" onClick={() => onPathClick?.('mock-path')}>Mock select path</button>
     <button type="button" onClick={() => onEdgeClick?.('n-out', 'n-a0')}>Mock select legacy connection</button>
@@ -134,13 +135,17 @@ describe('OrganizerV3', () => {
 
   it('edits the selected node name, coordinates, and zone-constrained floor without changing its id', async () => {
     const user = userEvent.setup();
+    const draftWithFreeNode: DraftV3 = {
+      ...(fixture as DraftV3),
+      nodes: [...(fixture as DraftV3).nodes, { id: 'n-free', name: 'Free point', lat: 13.051, lng: 80.246, z: 0, zoneId: 'b-a', fingerprintRevision: 1 }],
+    };
     mockFetch((url, init) => {
-      if (url === draftUrl && (!init || !init.method || init.method === 'GET')) return jsonResponse(fixture);
+      if (url === draftUrl && (!init || !init.method || init.method === 'GET')) return jsonResponse(draftWithFreeNode);
       return jsonResponse({}, 404);
     });
 
     render(<OrganizerV3 />);
-    await user.click(await screen.findByRole('button', { name: /select building a ground lobby n-a0/i }));
+    await user.click(await screen.findByRole('button', { name: /select free point n-free/i }));
 
     await user.clear(screen.getByLabelText('Node display name'));
     await user.type(screen.getByLabelText('Node display name'), 'Main lobby');
@@ -152,10 +157,10 @@ describe('OrganizerV3', () => {
     await user.click(screen.getByRole('button', { name: 'Update point' }));
 
     expect(await screen.findByRole('heading', { name: 'Main lobby' })).toBeVisible();
-    expect(screen.getByText('ID: n-a0')).toBeVisible();
+    expect(screen.getByText('ID: n-free')).toBeVisible();
     expect(screen.getByText(/Lat 13\.05200 Lng 80\.24600 · Floor 1 · b-a/)).toBeVisible();
     expect(screen.getByText('Fingerprint revision 2')).toBeVisible();
-    expect(screen.getByRole('button', { name: /select main lobby n-a0/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /select main lobby n-free/i })).toBeVisible();
     expect(screen.getByLabelText('Node floor')).not.toHaveTextContent('Building B');
     expect(screen.getByLabelText('Node floor')).not.toHaveTextContent('Floor 2');
   });
@@ -275,7 +280,20 @@ describe('OrganizerV3', () => {
 
   it('requires explicit stairs arming and auto-syncs placement to the linked landing floor', async () => {
     const user = userEvent.setup();
-    const saved = savedRequests();
+    const saved: unknown[] = [];
+    const draftWithFreeUpperLanding: DraftV3 = {
+      ...(fixture as DraftV3),
+      nodes: [...(fixture as DraftV3).nodes, { id: 'n-a1b', name: 'Building A free upper landing', lat: 13.052, lng: 80.247, z: 1, zoneId: 'b-a', fingerprintRevision: 1 }],
+    };
+    mockFetch((url, init) => {
+      if (url === draftUrl && (!init || !init.method || init.method === 'GET')) return jsonResponse(draftWithFreeUpperLanding);
+      if (url === draftUrl && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        saved.push(body);
+        return jsonResponse(body);
+      }
+      return jsonResponse({}, 404);
+    });
 
     render(<OrganizerV3 />);
     await user.click(await screen.findByRole('button', { name: /select zone building a/i }));
@@ -287,7 +305,7 @@ describe('OrganizerV3', () => {
     // Arm from the ground floor so the link itself proves explicit arming and auto-sync.
     await user.selectOptions(screen.getByLabelText('Placement floor'), '0');
     await user.click(screen.getByRole('button', { name: 'Link next landing as stairs' }));
-    await user.click(screen.getByRole('button', { name: 'Mock upper landing' }));
+    await user.click(screen.getByRole('button', { name: 'Mock unconnected upper landing' }));
     expect(screen.getByLabelText('Placement floor')).toHaveValue('1');
     await user.click(screen.getByRole('button', { name: 'Mock upper path corner' }));
     await user.click(screen.getByRole('button', { name: 'Finish path' }));
@@ -299,6 +317,53 @@ describe('OrganizerV3', () => {
     expect(path).toBeDefined();
     const routeEdges = withStairs.edges.filter((edge) => path?.nodeIds.includes(edge.from) && path.nodeIds.includes(edge.to));
     expect(routeEdges.filter((edge) => edge.kind === 'stairs')).toHaveLength(1);
+  });
+
+  it('disables Finish while a stairs link is armed and preserves the draft if clicked indirectly', async () => {
+    const user = userEvent.setup();
+    const saved = savedRequests();
+
+    render(<OrganizerV3 />);
+    await user.click(await screen.findByRole('button', { name: /select zone building a/i }));
+    await user.click(screen.getByRole('button', { name: 'Draw path' }));
+    await user.click(screen.getByRole('button', { name: 'Mock path start' }));
+    await user.click(screen.getByRole('button', { name: 'Mock path corner' }));
+    await user.click(screen.getByRole('button', { name: 'Link next landing as stairs' }));
+
+    expect(screen.getByRole('button', { name: 'Finish path' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Save draft' }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toMatchObject({ nodes: fixture.nodes, edges: fixture.edges });
+  });
+
+  it('lists stairs-only routes for selection and deletion independent of map geometry', async () => {
+    const user = userEvent.setup();
+    const stairsOnly: DraftV3 = {
+      ...(fixture as DraftV3),
+      paths: [{ id: 'stairs-only', name: 'North stairs', nodeIds: ['n-a0', 'n-a1'], controlNodeIds: ['n-a0', 'n-a1'] }],
+    };
+    const saved: unknown[] = [];
+    mockFetch((url, init) => {
+      if (url === draftUrl && (!init || !init.method || init.method === 'GET')) return jsonResponse(stairsOnly);
+      if (url === draftUrl && init?.method === 'PUT') {
+        const body = JSON.parse(String(init.body));
+        saved.push(body);
+        return jsonResponse(body);
+      }
+      return jsonResponse({}, 404);
+    });
+
+    render(<OrganizerV3 />);
+    await user.click(await screen.findByRole('button', { name: /select route north stairs/i }));
+    expect(screen.getByRole('button', { name: 'Delete path' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Delete path' }));
+    await user.click(screen.getByRole('button', { name: 'Save draft' }));
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    const afterDelete = saved[0] as DraftV3;
+    expect(afterDelete.paths ?? []).toHaveLength(0);
+    expect(afterDelete.nodes.some((node) => node.id === 'n-a0')).toBe(true);
+    expect(afterDelete.nodes.some((node) => node.id === 'n-a1')).toBe(true);
   });
 
   it('keeps the placement floor when zone rectangles bubble clicks while drawing', async () => {

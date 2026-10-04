@@ -369,12 +369,12 @@ export function pathPointLabels(map: Pick<DraftV3, 'paths'>, nodeId: string): Pa
 
 **Interfaces:** No new runtime API; document the Task 1 shapes and the Task 5/6 workflows.
 
-- [ ] Run full backend `npm test`, `npm run typecheck`, and `npm run build` independently.
-- [ ] Run full web `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, and `npm run e2e` independently.
-- [ ] Run full mobile `npm test -- --runInBand` and `npm run typecheck` independently. Do not claim Android device Wi-Fi accuracy from mocked tests; report physical-device surveying as unverified unless actually exercised.
-- [ ] Document these concrete additions: optional `paths: [{ id, name, nodeIds }]`, optional node `generated`, 3-metre code constant, pen Finish/Cancel controls, same-floor junctions, explicit staircase landings, route deletion semantics, and physical scanning at each point. Explain that old clients with strict parsers require an update to read manifests containing new metadata.
-- [ ] Review diffs in all three nested repositories and root documentation. Confirm no fixture/data reset, survey deletion, unrelated user changes, new user spacing control, or silently inferred cross-floor connection slipped in.
-- [ ] Report passed verification commands, any blocked tests, and physical-device limitations. Do not claim completion without fresh command results.
+- [x] Run full backend `npm test`, `npm run typecheck`, and `npm run build` independently.
+- [x] Run full web `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`, and `npm run e2e` independently.
+- [x] Run full mobile `npm test -- --runInBand` and `npm run typecheck` independently. Do not claim Android device Wi-Fi accuracy from mocked tests; report physical-device surveying as unverified unless actually exercised.
+- [x] Document these concrete additions: optional `paths: [{ id, name, nodeIds }]`, optional node `generated`, 3-metre code constant, pen Finish/Cancel controls, same-floor junctions, explicit staircase landings, route deletion semantics, and physical scanning at each point. Explain that old clients with strict parsers require an update to read manifests containing new metadata.
+- [x] Review diffs in all three nested repositories and root documentation. Confirm no fixture/data reset, survey deletion, unrelated user changes, new user spacing control, or silently inferred cross-floor connection slipped in.
+- [x] Report passed verification commands, any blocked tests, and physical-device limitations. Do not claim completion without fresh command results.
 
 ## Plan self-review
 
