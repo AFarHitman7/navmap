@@ -204,6 +204,53 @@ describe('OrganizerV3 undo/redo wiring', () => {
     expect(await screen.findByRole('button', { name: /select building a ground lobby n-a0/i })).toBeVisible();
   });
 
+  it('respects empty, plaintext-only, nested, and inherited editable targets', async () => {
+    const user = userEvent.setup();
+    mockGetDraft();
+    render(<OrganizerV3 />);
+    await renameLobby(user);
+
+    const host = document.createElement('div');
+    host.innerHTML =
+      '<div id="ce-empty" contenteditable=""><span id="ce-nested">edit me</span></div>' +
+      '<div id="ce-plain" contenteditable="plaintext-only">plain</div>';
+    document.body.appendChild(host);
+    try {
+      // Nested child inherits editability from the empty-attribute ancestor.
+      fireEvent.keyDown(host.querySelector('#ce-nested')!, { key: 'z', ctrlKey: true });
+      expect(screen.getByRole('heading', { name: 'Main lobby' })).toBeVisible();
+      fireEvent.keyDown(host.querySelector('#ce-empty')!, { key: 'z', ctrlKey: true });
+      expect(screen.getByRole('heading', { name: 'Main lobby' })).toBeVisible();
+      fireEvent.keyDown(host.querySelector('#ce-plain')!, { key: 'z', ctrlKey: true });
+      expect(screen.getByRole('heading', { name: 'Main lobby' })).toBeVisible();
+      // A platform isContentEditable=true (absent in jsdom) also keeps native undo.
+      const simulated = document.createElement('div');
+      Object.defineProperty(simulated, 'isContentEditable', { value: true });
+      host.appendChild(simulated);
+      fireEvent.keyDown(simulated, { key: 'z', ctrlKey: true });
+      expect(screen.getByRole('heading', { name: 'Main lobby' })).toBeVisible();
+    } finally {
+      host.remove();
+    }
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled();
+  });
+
+  it('still undoes from an explicitly non-editable island', async () => {
+    const user = userEvent.setup();
+    mockGetDraft();
+    render(<OrganizerV3 />);
+    await renameLobby(user);
+
+    const host = document.createElement('div');
+    host.innerHTML = '<div contenteditable=""><div id="ce-off" contenteditable="false">locked</div></div>';
+    document.body.appendChild(host);
+    try {
+      fireEvent.keyDown(host.querySelector('#ce-off')!, { key: 'z', ctrlKey: true });
+      expect(await screen.findByRole('heading', { name: 'Building A ground lobby' })).toBeVisible();
+    } finally {
+      host.remove();
+    }
+  });
   it('leaves native input undo alone', async () => {
     const user = userEvent.setup();
     mockGetDraft();

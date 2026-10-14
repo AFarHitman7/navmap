@@ -48,6 +48,11 @@ export function openDb(dbPath: string): DatabaseSync {
   if (dbPath !== ':memory:') {
     db.exec('PRAGMA journal_mode=WAL');
   }
+  // Contended writers wait instead of failing fast, so BEGIN IMMEDIATE write
+  // transactions in draft saves and sample submissions serialize across
+  // connections. Tests that need immediate contention errors set
+  // busy_timeout = 0 on their own connection.
+  db.exec('PRAGMA busy_timeout = 5000');
   initializeSchema(db);
   return db;
 }

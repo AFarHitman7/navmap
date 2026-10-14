@@ -154,8 +154,9 @@ export function updateDraftV5(db: DatabaseSync, parsed: ReturnType<typeof parseM
     fingerprintRevision: n.fingerprintRevision,
     geometry: nodeGeometryKeyV5(n),
   }));
-  // Atomic check-and-write, mirroring the V4 path: conflicts persist nothing.
-  db.exec('BEGIN');
+  // Atomic check-and-write, mirroring the V4 path (BEGIN IMMEDIATE so
+  // concurrent saves and sample submissions serialize): conflicts persist nothing.
+  db.exec('BEGIN IMMEDIATE');
   try {
     const storedRaw = loadDraftV3Json(db, draft.venueId);
     let stored: RevisionNodeRef[] | null = null;

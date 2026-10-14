@@ -92,9 +92,11 @@ export function updateDraftV3(db: DatabaseSync, raw: unknown): DraftV3 {
     fingerprintRevision: n.fingerprintRevision,
     geometry: nodeGeometryKeyV4(n),
   }));
-  // Atomic check-and-write: a 409 conflict persists nothing (no draft, AP, or
-  // high-water change), so concurrent saves cannot interleave half-applied.
-  db.exec('BEGIN');
+  // Atomic check-and-write: BEGIN IMMEDIATE takes the write lock up front so
+  // concurrent saves and sample submissions serialize instead of interleaving
+  // half-applied. A 409 conflict persists nothing (no draft, AP, high-water,
+  // or sample change).
+  db.exec('BEGIN IMMEDIATE');
   try {
     const storedRaw = loadDraftV3Json(db, draft.venueId);
     let stored: RevisionNodeRef[] | null = null;

@@ -92,57 +92,62 @@ export function addNodeSamples(
 ): number {
   normalizeVenueId(venueId);
   if (scans.length > 20) throw Object.assign(new Error('at most 20 scans per request'), { statusCode: 400 });
-  const node = loadDraftNodeRefs(db, venueId).get(nodeId);
-  if (!node) throw Object.assign(new Error(`unknown node: ${nodeId}`), { statusCode: 400 });
-  const highWater = getRevisionHighWater(db, venueId).get(nodeId);
-  const stale = (revision: number) =>
-    Object.assign(new Error(`stale fingerprint revision: scan ${revision}, node ${node.fingerprintRevision}`), {
-      statusCode: 409,
-      code: 'revision_conflict',
-      nodeIds: [nodeId],
-      currentRevisions: { [nodeId]: Math.max(node.fingerprintRevision, highWater ?? node.fingerprintRevision) },
-    });
-  const seen = new Set<number>();
-  const normalized = scans.map((scan) => {
-    const parsed = nodeScanSchema.parse({ ...scan, nodeId });
-    if (parsed.nodeId !== nodeId) {
-      throw Object.assign(new Error('scan nodeId must match request nodeId'), { statusCode: 400 });
-    }
-    if (parsed.fingerprintRevision !== node.fingerprintRevision) {
-      throw stale(parsed.fingerprintRevision);
-    }
-    // The durable high-water mark outlives node deletion: reusing a token at
-    // or below it can never silently reactivate historical samples.
-    if (highWater !== undefined && parsed.fingerprintRevision < highWater) {
-      throw stale(parsed.fingerprintRevision);
-    }
-    if (seen.has(parsed.capturedAt)) {
-      throw Object.assign(new Error(`duplicate capturedAt in request: ${parsed.capturedAt}`), { statusCode: 400 });
-    }
-    seen.add(parsed.capturedAt);
-    const existing = db
-      .prepare(
-        'SELECT captured_at FROM node_samples WHERE venue_id = ? AND node_id = ? AND fingerprint_revision = ? AND captured_at = ?',
-      )
-      .get(venueId, nodeId, parsed.fingerprintRevision, parsed.capturedAt) as
-      | { captured_at: number }
-      | undefined;
-    if (existing) {
-      throw Object.assign(new Error(`duplicate scan timestamp: ${parsed.capturedAt}`), { statusCode: 400 });
-    }
-    return {
-      ...parsed,
-      readings: parsed.readings.map((r) => ({ bssid: sanitizeBssid(r.bssid), rssi: r.rssi })),
-    };
-  });
-  db.exec('BEGIN');
+  // One write transaction spans validation reads and inserts: a concurrent
+  // geometry save cannot commit between the revision check and the insert.
+  // BEGIN IMMEDIATE (with busy_timeout from openDb) serializes against
+  // updateDraftV3/V5 saves on other connections instead of interleaving.
+  db.exec('BEGIN IMMEDIATE');
   try {
+    const node = loadDraftNodeRefs(db, venueId).get(nodeId);
+    if (!node) throw Object.assign(new Error(`unknown node: ${nodeId}`), { statusCode: 400 });
+    const highWater = getRevisionHighWater(db, venueId).get(nodeId);
+    const stale = (revision: number) =>
+      Object.assign(new Error(`stale fingerprint revision: scan ${revision}, node ${node.fingerprintRevision}`), {
+        statusCode: 409,
+        code: 'revision_conflict',
+        nodeIds: [nodeId],
+        currentRevisions: { [nodeId]: Math.max(node.fingerprintRevision, highWater ?? node.fingerprintRevision) },
+      });
+    const seen = new Set<number>();
+    const normalized = scans.map((scan) => {
+      const parsed = nodeScanSchema.parse({ ...scan, nodeId });
+      if (parsed.nodeId !== nodeId) {
+        throw Object.assign(new Error('scan nodeId must match request nodeId'), { statusCode: 400 });
+      }
+      if (parsed.fingerprintRevision !== node.fingerprintRevision) {
+        throw stale(parsed.fingerprintRevision);
+      }
+      // The durable high-water mark outlives node deletion: reusing a token at
+      // or below it can never silently reactivate historical samples.
+      if (highWater !== undefined && parsed.fingerprintRevision < highWater) {
+        throw stale(parsed.fingerprintRevision);
+      }
+      if (seen.has(parsed.capturedAt)) {
+        throw Object.assign(new Error(`duplicate capturedAt in request: ${parsed.capturedAt}`), { statusCode: 400 });
+      }
+      seen.add(parsed.capturedAt);
+      const existing = db
+        .prepare(
+          'SELECT captured_at FROM node_samples WHERE venue_id = ? AND node_id = ? AND fingerprint_revision = ? AND captured_at = ?',
+        )
+        .get(venueId, nodeId, parsed.fingerprintRevision, parsed.capturedAt) as
+        | { captured_at: number }
+        | undefined;
+      if (existing) {
+        throw Object.assign(new Error(`duplicate scan timestamp: ${parsed.capturedAt}`), { statusCode: 400 });
+      }
+      return {
+        ...parsed,
+        readings: parsed.readings.map((r) => ({ bssid: sanitizeBssid(r.bssid), rssi: r.rssi })),
+      };
+    });
     for (const s of normalized) {
       db.prepare(
         'INSERT INTO node_samples (venue_id, node_id, fingerprint_revision, captured_at, readings_json) VALUES (?, ?, ?, ?, ?)',
       ).run(venueId, nodeId, s.fingerprintRevision, s.capturedAt, JSON.stringify(s.readings));
     }
     db.exec('COMMIT');
+    return normalized.length;
   } catch (err) {
     try {
       db.exec('ROLLBACK');
@@ -151,7 +156,6 @@ export function addNodeSamples(
     }
     throw err;
   }
-  return normalized.length;
 }
 
 export function buildNodeProfiles(scans: NodeScan[], allowlist: string[]): NodeProfileV3[] {

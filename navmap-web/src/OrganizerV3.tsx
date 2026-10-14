@@ -32,6 +32,33 @@ import { isNodeVisible, resolveFloorVisibility, type ZoneFloorVisibility } from 
 type Tab = 'build' | 'places' | 'publish';
 type Candidate = { bounds: BoundsV3; kind: 'boundary' | 'zone' };
 const message = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong. Try again.');
+
+/**
+ * True when a keyboard event originates from a natively editable target whose
+ * own undo must win over document undo. Prefers the platform's isContentEditable
+ * computation (covers "", "true", "plaintext-only", and inheritance); falls back
+ * to a spec-shaped ancestor walk where isContentEditable is unavailable (jsdom).
+ */
+function isNativeUndoTarget(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+  const host = el.nodeType === 1 ? (el as HTMLElement) : el.parentElement;
+  if (!host) return false;
+  if (typeof (host as HTMLElement).isContentEditable === 'boolean') return (host as HTMLElement).isContentEditable;
+  let node: Element | null = host;
+  while (node) {
+    const attr = typeof node.getAttribute === 'function' ? node.getAttribute('contenteditable') : null;
+    if (attr !== null) {
+      const state = attr.trim().toLowerCase();
+      if (state === '' || state === 'true' || state === 'plaintext-only') return true;
+      if (state === 'false') return false;
+      // Any other value inherits: keep walking toward the root.
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
 const preferredFloor = (floors: { z: number }[]) => floors.find((f) => f.z === 0)?.z ?? floors[0]?.z ?? 0;
 const nodeLabel = (n: { id: string; name: string }) => `${n.name} ${n.id}`;
 const sameEdge = (edge: EdgeV3, from: string, to: string) =>
@@ -173,10 +200,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
       const wantUndo = key === 'z' && !e.shiftKey;
       const wantRedo = key === 'y' || (key === 'z' && e.shiftKey);
       if (!wantUndo && !wantRedo) return;
-      const target = e.target as HTMLElement | null;
-      if (target && typeof target.closest === 'function' && target.closest('input, textarea, select, [contenteditable="true"]')) {
-        return; // Native input undo remains native.
-      }
+      if (isNativeUndoTarget(e.target)) return; // Native input undo remains native.
       if (lock.current || busy || phase !== 'ready') return; // Locked while loading/saving/publishing.
       e.preventDefault();
       if (wantUndo) undoEditOrPending();
