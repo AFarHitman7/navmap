@@ -188,3 +188,154 @@ describe('v5 persistence', () => {
     }
   });
 });
+
+describe('v5 save-time graph/frame validation', () => {
+  it('rejects a geographic node outside its frame bounds without persisting', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      await withFlag('1', async () => {
+        const valid = { ...geographicDraft(), venueId: 'demo' };
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        const before = loadDraftV3Json(db, 'demo');
+        const bad = { ...geographicDraft(), venueId: 'demo' };
+        const target = bad.nodes.find((n) => n.id === 'n-a0b')!;
+        // Frame frame-b-a-z0 spans north 13.08; 13.09 parses but leaves the frame.
+        (target.position as { kind: 'geographic'; lat: number; lng: number }).lat = 13.09;
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        expect(put.statusCode).toBe(400);
+        expect(put.body).toMatch(/outside its frame/);
+        expect(loadDraftV3Json(db, 'demo')).toBe(before);
+      });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects geographic cross-frame ordinary edges without persisting', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      await withFlag('1', async () => {
+        const valid = { ...geographicDraft(), venueId: 'demo' };
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        const before = loadDraftV3Json(db, 'demo');
+        const bad = {
+          ...geographicDraft(),
+          venueId: 'demo',
+          edges: [...geographicDraft().edges, { from: 'n-a0b', to: 'n-a1', kind: 'path', cost: 1, meters: 1 }],
+        };
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        expect(put.statusCode).toBe(400);
+        expect(put.body).toMatch(/same frame/);
+        expect(loadDraftV3Json(db, 'demo')).toBe(before);
+      });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects invalid geographic transition geometry without persisting', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      await withFlag('1', async () => {
+        const valid = { ...geographicDraft(), venueId: 'demo' };
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        const before = loadDraftV3Json(db, 'demo');
+        const bad = {
+          ...geographicDraft(),
+          venueId: 'demo',
+          edges: [...geographicDraft().edges, { from: 'n-a0', to: 'n-a0g', kind: 'stairs', cost: 4 }],
+          transitions: [
+            ...geographicDraft().transitions,
+            { id: 'tr-stairs-same-floor', name: 'stairs n-a0 ↔ n-a0g', kind: 'stair', nodeIds: ['n-a0', 'n-a0g'] },
+          ],
+        };
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        expect(put.statusCode).toBe(400);
+        expect(put.body).toMatch(/different floors/);
+        expect(loadDraftV3Json(db, 'demo')).toBe(before);
+      });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects a static node outside its frame bounds without persisting', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      await withFlag('1', async () => {
+        const valid = { ...staticDraft(), venueId: 'demo' };
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        const before = loadDraftV3Json(db, 'demo');
+        const base = staticDraft();
+        const bad = {
+          ...base,
+          venueId: 'demo',
+          // Narrow one frame: s-a0 at (0.2, 0.3) still parses but leaves its frame.
+          frames: base.frames.map((f) =>
+            f.id === 'frame-b-a-z0' ? { ...f, bounds: { kind: 'local', left: 0.4, top: 0.4, right: 0.6, bottom: 0.6 } } : f,
+          ),
+        };
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        expect(put.statusCode).toBe(400);
+        expect(put.body).toMatch(/outside its frame/);
+        expect(loadDraftV3Json(db, 'demo')).toBe(before);
+      });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects static cross-frame ordinary edges without persisting', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      await withFlag('1', async () => {
+        const valid = { ...staticDraft(), venueId: 'demo' };
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        const before = loadDraftV3Json(db, 'demo');
+        const bad = {
+          ...staticDraft(),
+          venueId: 'demo',
+          edges: [...staticDraft().edges, { from: 's-a0b', to: 's-a1b', kind: 'path', cost: 0.01 }],
+        };
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        expect(put.statusCode).toBe(400);
+        expect(put.body).toMatch(/same frame/);
+        expect(loadDraftV3Json(db, 'demo')).toBe(before);
+      });
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects invalid static transition geometry without persisting', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      await withFlag('1', async () => {
+        const valid = { ...staticDraft(), venueId: 'demo' };
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        const before = loadDraftV3Json(db, 'demo');
+        const bad = {
+          ...staticDraft(),
+          venueId: 'demo',
+          edges: [...staticDraft().edges, { from: 's-a0b', to: 's-a1', kind: 'entrance', cost: 1 }],
+          transitions: [
+            ...staticDraft().transitions,
+            { id: 'tr-indoor-entrance', name: 'entrance s-a0b ↔ s-a1', kind: 'entrance', nodeIds: ['s-a0b', 's-a1'] },
+          ],
+        };
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        expect(put.statusCode).toBe(400);
+        expect(put.body).toMatch(/outdoors/);
+        expect(loadDraftV3Json(db, 'demo')).toBe(before);
+      });
+    } finally {
+      discardDb(db);
+    }
+  });
+});

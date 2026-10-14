@@ -186,7 +186,7 @@ export function staticDraft(): MapDraft {
         id: 's-a0g',
         name: 'Survey point',
         frameId: 'frame-b-a-z0',
-        position: { kind: 'local', x: 0.44, y: 0.62 },
+        position: { kind: 'local', x: 0.46, y: 0.6 },
         zoneId: 'b-a',
         z: 0,
         fingerprintRevision: 1,

@@ -171,12 +171,14 @@ function contentFramesV5(draft: MapDraft): Set<string> {
 }
 
 /**
- * Save-time V5 checks (beyond strict parsing): static authoring is disallowed
- * until every content frame has an assigned background. Runs on every save,
- * not only at publish.
+ * Save-time V5 checks: strict parsing plus the shared graph/frame geometry
+ * checks, plus the static background gate (authoring is disallowed until
+ * every content frame has an assigned background). Runs on every save, not
+ * only at publish. Publication-only prerequisites (asset verification,
+ * boundary presence) stay in validatePublishV5.
  */
 export function validateSaveV5(draft: MapDraft): string[] {
-  const errors: string[] = [];
+  const errors: string[] = [...validateGraphV5(draft)];
   if (draft.canvas.kind !== 'static') return errors;
   const content = contentFramesV5(draft);
   for (const frame of draft.frames) {
@@ -188,16 +190,12 @@ export function validateSaveV5(draft: MapDraft): string[] {
 }
 
 /**
- * Publish-time V5 checks: frame-aware edge membership, same-frame geometry
- * resolution, path-group rules, and the static asset gate (static
- * publication stays rejected until frame assets are verified in a later
- * task).
+ * Shared V5 graph/frame geometry checks used by both save and publish:
+ * node-in-frame bounds, edge-kind/frame topology, positive costs, same-frame
+ * crossing resolution, and path-group rules.
  */
-export function validatePublishV5(draft: MapDraft): string[] {
+export function validateGraphV5(draft: MapDraft): string[] {
   const errors: string[] = [];
-  if (draft.canvas.kind === 'geographic' && draft.boundary === null) {
-    errors.push('venue needs an outdoor boundary');
-  }
   const nodeById = new Map(draft.nodes.map((n) => [n.id, n]));
   for (const node of draft.nodes) {
     if (!nodeInFrameV5(draft, node)) {
@@ -230,6 +228,21 @@ export function validatePublishV5(draft: MapDraft): string[] {
   }
   errors.push(...validateUnresolvedPathGeometryV5(draft));
   errors.push(...validatePathGroupsV5(draft));
+  return errors;
+}
+
+/**
+ * Publish-time V5 checks: the shared graph/frame geometry checks plus
+ * publication-only prerequisites — the geographic boundary requirement and
+ * the static asset gate (static publication stays rejected until frame
+ * assets are verified in a later task).
+ */
+export function validatePublishV5(draft: MapDraft): string[] {
+  const errors: string[] = [];
+  if (draft.canvas.kind === 'geographic' && draft.boundary === null) {
+    errors.push('venue needs an outdoor boundary');
+  }
+  errors.push(...validateGraphV5(draft));
   if (draft.canvas.kind === 'static') {
     errors.push('static publication requires verified frame assets');
   }
