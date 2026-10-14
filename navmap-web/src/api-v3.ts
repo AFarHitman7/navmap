@@ -1,5 +1,6 @@
 import { parseDraftV3, parseManifestV3, type DraftV3, type ManifestV3 } from './contract-v3';
 import { parseMapDraft, parseMapManifest, type MapDraft, type MapManifest } from './map-contract';
+export type { LayoutAsset } from './layout-api';
 
 export class PublishValidationError extends Error {
   readonly issues: string[];

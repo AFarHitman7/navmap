@@ -18,6 +18,7 @@ import {
 } from '../map-contract';
 import { containsPosition, segmentMetrics, transitionMetrics } from '../map-geometry';
 import { connectLegacyPathNodes, isGroupedPathNode, movePathNode, movePathNodeV5 } from './paths';
+import type { LayoutAsset } from '../layout-api';
 
 export function emptyDraftV3(venueId = 'demo'): DraftV3 {
   return {
@@ -685,4 +686,72 @@ export function invalidateFrameNodesV5(draft: MapDraft, frameId: string): MapDra
     ...draft,
     nodes: draft.nodes.map((n) => (n.frameId === frameId ? { ...n, fingerprintRevision: n.fingerprintRevision + 1 } : n)),
   });
+}
+
+/** Assign or replace a frame image without moving normalized node positions. */
+export function assignBackground(draft: MapDraft, frameId: string, asset: LayoutAsset): MapDraft {
+  if (draft.canvas.kind !== 'static') throw new Error('Layout backgrounds require a static map');
+  const frame = requireFrameV5(draft, frameId);
+  const nodeById = new Map(draft.nodes.map((node) => [node.id, node]));
+  const assigned = {
+    ...draft,
+    frames: draft.frames.map((item) => item.id === frameId
+      ? { ...item, background: { ...asset }, calibration: undefined }
+      : item),
+    edges: draft.edges.map((edge) => {
+      const from = nodeById.get(edge.from);
+      const to = nodeById.get(edge.to);
+      if (!from || !to || from.frameId !== frameId || to.frameId !== frameId) return edge;
+      const withoutOldScale = { ...edge };
+      delete withoutOldScale.meters;
+      return withoutOldScale;
+    }),
+  };
+  return invalidateFrameNodesV5(assigned, frame.id);
+}
+
+/** Recalibrate one frame; topology and dimensionless routing weights stay unchanged. */
+export function calibrateFrame(
+  draft: MapDraft,
+  frameId: string,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  meters: number,
+): MapDraft {
+  if (draft.canvas.kind !== 'static') throw new Error('Scale calibration requires a static map');
+  const frame = requireFrameV5(draft, frameId);
+  if (!frame.background) throw new Error(`Frame ${frame.id} needs an assigned background before calibration`);
+  if (![a.x, a.y, b.x, b.y].every((coordinate) => Number.isFinite(coordinate) && coordinate >= 0 && coordinate <= 1)) {
+    throw new Error('Choose two distinct points and a positive distance');
+  }
+  const pixelDistance = Math.hypot(
+    (b.x - a.x) * frame.background.width,
+    (b.y - a.y) * frame.background.height,
+  );
+  if (!(meters > 0 && Number.isFinite(meters)) || pixelDistance === 0 || !Number.isFinite(pixelDistance)) {
+    throw new Error('Choose two distinct points and a positive distance');
+  }
+  const metersPerPixel = meters / pixelDistance;
+  if (!(metersPerPixel > 0 && Number.isFinite(metersPerPixel))) {
+    throw new Error('Choose two distinct points and a positive distance');
+  }
+  const nodes = new Map(draft.nodes.map((node) => [node.id, node]));
+  const calibrated = parseMapDraft({
+    ...draft,
+    frames: draft.frames.map((item) => item.id === frameId ? { ...item, calibration: { metersPerPixel } } : item),
+    edges: draft.edges.map((edge) => {
+      const from = nodes.get(edge.from);
+      const to = nodes.get(edge.to);
+      if (!from || !to || from.frameId !== frameId || to.frameId !== frameId) return edge;
+      const distance = Math.hypot(
+        ((to.position as { x: number; y: number }).x - (from.position as { x: number; y: number }).x) * frame.background!.width,
+        ((to.position as { x: number; y: number }).y - (from.position as { x: number; y: number }).y) * frame.background!.height,
+      ) * metersPerPixel;
+      if (Number.isFinite(distance) && distance > 0) return { ...edge, meters: distance };
+      const withoutStaleMeasure = { ...edge };
+      delete withoutStaleMeasure.meters;
+      return withoutStaleMeasure;
+    }),
+  });
+  return invalidateFrameNodesV5(calibrated, frameId);
 }
