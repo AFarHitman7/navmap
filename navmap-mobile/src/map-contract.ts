@@ -48,6 +48,7 @@ export type MapPath = {
   kind: 'regular' | 'stair';
   nodeIds: string[];
   controlNodeIds?: string[];
+  transitionId?: string;
 };
 export type MapTransition = {
   id: string;
@@ -274,7 +275,7 @@ function parseEdge(raw: unknown): MapEdge {
 
 function parsePath(raw: unknown): MapPath {
   if (!isRecord(raw)) fail('path must be an object');
-  checkStrict(raw, ['id', 'name', 'kind', 'nodeIds', 'controlNodeIds'], 'path');
+  checkStrict(raw, ['id', 'name', 'kind', 'nodeIds', 'controlNodeIds', 'transitionId'], 'path');
   if (!isNonEmptyString(raw.id)) fail('path.id must be a non-empty string');
   if (!isNonEmptyString(raw.name)) fail(`path ${raw.id} name must be a non-empty string`);
   if (raw.kind !== 'regular' && raw.kind !== 'stair') fail(`path ${raw.id} kind must be regular|stair`);
@@ -284,6 +285,10 @@ function parsePath(raw: unknown): MapPath {
     return id as string;
   });
   const path: MapPath = { id: raw.id as string, name: raw.name as string, kind: raw.kind, nodeIds };
+  if (raw.transitionId !== undefined) {
+    if (!isNonEmptyString(raw.transitionId)) fail(`path ${raw.id} transitionId must be a non-empty string`);
+    path.transitionId = raw.transitionId;
+  }
   if (raw.controlNodeIds !== undefined) {
     if (!Array.isArray(raw.controlNodeIds) || raw.controlNodeIds.length < 2) {
       fail(`path ${raw.id} controlNodeIds needs at least two ids`);
@@ -419,6 +424,7 @@ function checkRelations(doc: MapDraft, manifest: boolean): void {
   });
 
   if (doc.paths) {
+    const stairGroups = new Set<string>();
     doc.paths.forEach((path) => {
       path.nodeIds.forEach((id) => {
         if (!nodeById.has(id)) fail(`path ${path.id} references unknown node ${id}`);
@@ -433,17 +439,28 @@ function checkRelations(doc: MapDraft, manifest: boolean): void {
         const b = path.nodeIds[k + 1] as string;
         const hit = edgeKindByPair.get(pairKey(a, b));
         if (!hit) fail(`path ${path.id} has no edge between ${a} and ${b}`);
-        else if (hit !== 'path') fail(`path ${path.id} traverses transition edge ${a} ${b}`);
+        else if (path.kind === 'regular' && hit !== 'path') fail(`regular path ${path.id} traverses transition edge ${a} ${b}`);
       }
+      if (path.kind === 'stair') {
+        const transition = path.transitionId ? doc.transitions.find((item) => item.id === path.transitionId) : undefined;
+        if (path.nodeIds.length !== 2 || !transition || transition.kind !== 'stair' ||
+            pairKey(...transition.nodeIds) !== pairKey(path.nodeIds[0]!, path.nodeIds[1]!)) fail(`stair path ${path.id} must reference its matching stair transition`);
+        if (path.transitionId && stairGroups.has(path.transitionId)) fail(`duplicate stair path group for transition ${path.transitionId}`);
+        if (path.transitionId) stairGroups.add(path.transitionId);
+      } else if (path.transitionId !== undefined) fail(`regular path ${path.id} cannot reference a transition`);
     });
   }
 
   const transitionKindForEdge: Record<string, string> = { entrance: 'entrance', stairs: 'stair', elevator: 'elevator' };
+  const transitionPairs = new Set<string>();
   doc.transitions.forEach((t) => {
     const [a, b] = t.nodeIds;
     if (!nodeById.has(a)) fail(`transition ${t.id} references unknown node ${a}`);
     if (!nodeById.has(b)) fail(`transition ${t.id} references unknown node ${b}`);
     const hit = edgeKindByPair.get(pairKey(a, b));
+    const transitionPair = pairKey(a, b);
+    if (transitionPairs.has(transitionPair)) fail(`duplicate transition for node pair ${a} ${b}`);
+    transitionPairs.add(transitionPair);
     if (!hit || transitionKindForEdge[hit] !== t.kind) {
       fail(`transition ${t.id} must match a ${t.kind} edge between its nodes`);
     }

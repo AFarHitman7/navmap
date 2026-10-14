@@ -3,6 +3,22 @@ import { readFileSync } from 'node:fs';
 import { parseDraftV3, parseManifestV3 } from '../src/draft.js';
 import { parseMapDraft, parseMapManifest, upgradeV4Draft, upgradeV4Manifest } from '../src/map-contract.js';
 import { geographicDraft, staticDraft } from '../src/fixtures/map-v5.js';
+import { validateGraphV5, validatePublishV5, validateSaveV5 } from '../src/validate-v3.js';
+import { validatePathGroupsV5 } from '../src/path-validation.js';
+
+describe('stair path contract', () => {
+  it('requires a stair path group to match one paired stair transition', () => {
+    const draft = staticDraft();
+    const stairPath = { id: 'p-stair', name: 'East stairs', kind: 'stair' as const, nodeIds: ['s-a0', 's-a1'], transitionId: 'tr-s-a0-s-a1' };
+    const parsed = parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), stairPath] });
+    expect(parsed.paths?.[parsed.paths.length - 1]).toMatchObject(stairPath);
+    expect(validateGraphV5(parsed)).toEqual([]);
+    expect(validateSaveV5(parsed)).toEqual([]);
+    expect(validatePublishV5(parsed)).toEqual([]);
+    expect(validatePathGroupsV5({ ...parsed, transitions: [...parsed.transitions, { ...parsed.transitions[0]!, id: 'duplicate-transition' }] })).toContain('duplicate transition for node pair s-a0 s-a1');
+    expect(() => parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), { ...stairPath, transitionId: 'missing' }] })).toThrow(/matching stair transition/);
+  });
+});
 
 const geographicJson = JSON.parse(
   readFileSync(new URL('../src/fixtures/map-v5-geographic.json', import.meta.url), 'utf8'),

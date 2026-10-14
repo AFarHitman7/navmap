@@ -1,7 +1,7 @@
 import type { DraftV3, NodeV3 } from './contract-v3';
 import type { MapDraft, MapManifest } from './map-contract';
 
-export type PathPointLabel = { pathId: string; pathName: string; index: number; total: number };
+export type PathPointLabel = { pathId: string; pathName: string; kind: 'regular' | 'stair'; index: number; total: number };
 
 type PathHolder = Pick<DraftV3, 'paths'> | Pick<MapDraft, 'paths'> | Pick<MapManifest, 'paths'>;
 
@@ -9,7 +9,13 @@ type PathHolder = Pick<DraftV3, 'paths'> | Pick<MapDraft, 'paths'> | Pick<MapMan
 export function pathPointLabels(map: PathHolder, nodeId: string): PathPointLabel[] {
   return (map.paths ?? []).flatMap((path) => {
     const index = path.nodeIds.indexOf(nodeId);
-    return index < 0 ? [] : [{ pathId: path.id, pathName: path.name, index: index + 1, total: path.nodeIds.length }];
+    return index < 0 ? [] : [{
+      pathId: path.id,
+      pathName: path.name,
+      kind: 'kind' in path && path.kind === 'stair' ? 'stair' : 'regular',
+      index: index + 1,
+      total: path.nodeIds.length,
+    }];
   });
 }
 

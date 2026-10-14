@@ -142,6 +142,7 @@ const pathSchema = z
     name: z.string().min(1),
     kind: z.enum(['regular', 'stair']),
     nodeIds: z.array(z.string().min(1)).min(2),
+    transitionId: z.string().min(1).optional(),
     controlNodeIds: z.array(z.string().min(1)).min(2).optional(),
   })
   .strict();
@@ -306,6 +307,7 @@ function checkMapRelations(doc: DraftRaw, ctx: z.RefinementCtx, manifest: boolea
   });
 
   if (doc.paths) {
+    const stairGroups = new Set<string>();
     doc.paths.forEach((path, i) => {
       path.nodeIds.forEach((id) => {
         if (!nodeById.has(id)) issue(`path ${path.id} references unknown node ${id}`, ['paths', i, 'nodeIds']);
@@ -321,20 +323,38 @@ function checkMapRelations(doc: DraftRaw, ctx: z.RefinementCtx, manifest: boolea
         const hit = edgeKindByPair.get(pairKey(a, b));
         if (!hit) {
           issue(`path ${path.id} has no edge between ${a} and ${b}`, ['paths', i, 'nodeIds']);
-        } else if (hit !== 'path') {
-          issue(`path ${path.id} traverses transition edge ${a} ${b}`, ['paths', i, 'nodeIds']);
+        } else if (path.kind === 'regular' && hit !== 'path') {
+          issue(`regular path ${path.id} traverses transition edge ${a} ${b}`, ['paths', i, 'nodeIds']);
         }
+      }
+      if (path.kind === 'stair') {
+        if (path.nodeIds.length !== 2 || !path.transitionId) {
+          issue(`stair path ${path.id} must reference exactly one transition`, ['paths', i]);
+        } else {
+          if (stairGroups.has(path.transitionId)) issue(`duplicate stair path group for transition ${path.transitionId}`, ['paths', i, 'transitionId']);
+          stairGroups.add(path.transitionId);
+          const transition = doc.transitions.find((item) => item.id === path.transitionId);
+          if (!transition || transition.kind !== 'stair' || pairKey(...transition.nodeIds) !== pairKey(path.nodeIds[0]!, path.nodeIds[1]!)) {
+            issue(`stair path ${path.id} must reference its matching stair transition`, ['paths', i, 'transitionId']);
+          }
+        }
+      } else if (path.transitionId !== undefined) {
+        issue(`regular path ${path.id} cannot reference a transition`, ['paths', i, 'transitionId']);
       }
     });
   }
 
   // Each transition mirrors exactly one entrance/stairs/elevator edge pair.
   const transitionKindForEdge: Record<string, string> = { entrance: 'entrance', stairs: 'stair', elevator: 'elevator' };
+  const transitionPairs = new Set<string>();
   doc.transitions.forEach((t, i) => {
     const [a, b] = t.nodeIds;
     if (!nodeById.has(a)) issue(`transition ${t.id} references unknown node ${a}`, ['transitions', i, 'nodeIds']);
     if (!nodeById.has(b)) issue(`transition ${t.id} references unknown node ${b}`, ['transitions', i, 'nodeIds']);
     const hit = edgeKindByPair.get(pairKey(a, b));
+    const transitionPair = pairKey(a, b);
+    if (transitionPairs.has(transitionPair)) issue(`duplicate transition for node pair ${a} ${b}`, ['transitions', i]);
+    transitionPairs.add(transitionPair);
     if (!hit || transitionKindForEdge[hit] !== t.kind) {
       issue(`transition ${t.id} must match a ${t.kind} edge between its nodes`, ['transitions', i, 'nodeIds']);
     }

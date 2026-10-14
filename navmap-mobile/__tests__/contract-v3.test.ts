@@ -178,6 +178,14 @@ test('bad bounds ordering is rejected', () => {
   ).toThrow(/non-null/);
 });
 
+test('native V5 parser accepts only an explicit stair path paired to its transition', () => {
+  const draft = staticDraft();
+  const stairPath = { id: 'p-stair', name: 'East stairs', kind: 'stair', nodeIds: ['s-a0', 's-a1'], transitionId: 'tr-s-a0-s-a1' };
+  const parsed = parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), stairPath] });
+  expect(parsed.paths?.[parsed.paths.length - 1]).toMatchObject(stairPath);
+  expect(() => parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), { ...stairPath, transitionId: 'missing' }] })).toThrow(/matching stair transition/);
+});
+
 test('v5 geographic fixture parses with floor and outdoor frames', () => {
   const draft = parseMapDraft(geographicDraft());
   expect(draft.schemaVersion).toBe(5);
