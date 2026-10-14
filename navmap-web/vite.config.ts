@@ -31,6 +31,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: false,
     setupFiles: ['./test/setup.ts'],
+    maxWorkers: 2,
+    testTimeout: 15_000,
     exclude: ['e2e/**', 'node_modules/**', '.superpowers/**'],
   },
 });

@@ -184,6 +184,7 @@ test('native V5 parser accepts only an explicit stair path paired to its transit
   const parsed = parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), stairPath] });
   expect(parsed.paths?.[parsed.paths.length - 1]).toMatchObject(stairPath);
   expect(() => parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), { ...stairPath, transitionId: 'missing' }] })).toThrow(/matching stair transition/);
+  expect(() => parseMapDraft({ ...draft, paths: [ { ...stairPath, nodeIds: ['s-a1', 's-a0'] } ] })).toThrow(/ordered stair landing pair/);
 });
 
 test('v5 geographic fixture parses with floor and outdoor frames', () => {

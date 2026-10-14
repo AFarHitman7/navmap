@@ -444,7 +444,7 @@ function checkRelations(doc: MapDraft, manifest: boolean): void {
       if (path.kind === 'stair') {
         const transition = path.transitionId ? doc.transitions.find((item) => item.id === path.transitionId) : undefined;
         if (path.nodeIds.length !== 2 || !transition || transition.kind !== 'stair' ||
-            pairKey(...transition.nodeIds) !== pairKey(path.nodeIds[0]!, path.nodeIds[1]!)) fail(`stair path ${path.id} must reference its matching stair transition`);
+            transition.nodeIds[0] !== path.nodeIds[0] || transition.nodeIds[1] !== path.nodeIds[1]) fail(`stair path ${path.id} must reference its matching stair transition and ordered stair landing pair`);
         if (path.transitionId && stairGroups.has(path.transitionId)) fail(`duplicate stair path group for transition ${path.transitionId}`);
         if (path.transitionId) stairGroups.add(path.transitionId);
       } else if (path.transitionId !== undefined) fail(`regular path ${path.id} cannot reference a transition`);

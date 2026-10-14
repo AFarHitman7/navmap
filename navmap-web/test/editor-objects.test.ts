@@ -19,6 +19,10 @@ describe('logical editor objects', () => {
     expect(next.edges.filter((edge) => edge.kind === 'stairs')).toHaveLength(1);
     const withPath = addStairPath(next, transition.id, 'East stair route');
     expect(withPath.paths?.at(-1)).toMatchObject({ kind: 'stair', nodeIds: ['s-a0', 's-a1'], transitionId: transition.id });
+    expect(() => parseMapDraft({
+      ...withPath,
+      paths: withPath.paths?.map((path) => path.transitionId === transition.id ? { ...path, nodeIds: ['s-a1', 's-a0'] } : path),
+    })).toThrow(/ordered stair landing pair/);
     expect(() => addStairPath(withPath, transition.id, 'Duplicate group')).toThrow(/already has/);
   });
 
@@ -30,6 +34,18 @@ describe('logical editor objects', () => {
     expect(next.transitions.at(-1)).toMatchObject({ kind: 'stair', name: 'New stair' });
     expect(next.edges.at(-1)).toMatchObject({ kind: 'stairs', meters: 7 });
     expect(next.nodes.filter((node) => ['Lower', 'Upper'].includes(node.name))).toHaveLength(2);
+  });
+
+  it('reuses the deterministic closest same-frame landing for a positioned endpoint', () => {
+    const base = removeTransition(staticDraft(), 'tr-s-a0-s-a1');
+    const duplicate = { ...base.nodes.find((node) => node.id === 's-a0')!, id: 'z-duplicate' };
+    const draft = { ...base, nodes: [...base.nodes, duplicate] };
+    const next = addStair(draft,
+      { frameId: 'frame-b-a-z0', position: { kind: 'local', x: 0.2 + 5e-10, y: 0.3 } },
+      { frameId: 'frame-b-a-z1', position: { kind: 'local', x: 0.2, y: 0.3 } },
+      'Reused stair');
+    expect(next.nodes).toHaveLength(draft.nodes.length);
+    expect(next.transitions.at(-1)?.nodeIds).toEqual(['s-a0', 's-a1']);
   });
 
   it('rejects duplicate transition pairs without changing the source draft', () => {

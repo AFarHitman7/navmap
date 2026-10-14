@@ -16,6 +16,9 @@ describe('stair path contract', () => {
     expect(validateSaveV5(parsed)).toEqual([]);
     expect(validatePublishV5(parsed)).toEqual([]);
     expect(validatePathGroupsV5({ ...parsed, transitions: [...parsed.transitions, { ...parsed.transitions[0]!, id: 'duplicate-transition' }] })).toContain('duplicate transition for node pair s-a0 s-a1');
+    const reversed = { ...parsed, paths: [{ ...stairPath, nodeIds: ['s-a1', 's-a0'] }] };
+    expect(() => parseMapDraft(reversed)).toThrow(/ordered stair landing pair/);
+    expect(validatePathGroupsV5(reversed)).toContain('stair path p-stair must reference its matching stair transition and ordered stair landing pair');
     expect(() => parseMapDraft({ ...draft, paths: [...(draft.paths ?? []), { ...stairPath, transitionId: 'missing' }] })).toThrow(/matching stair transition/);
   });
 });

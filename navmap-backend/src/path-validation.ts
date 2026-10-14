@@ -110,8 +110,8 @@ export function validatePathGroupsV5(draft: MapDraft): string[] {
       if (path.transitionId && seenStairGroups.has(path.transitionId)) errors.push(`duplicate stair path group for transition ${path.transitionId}`);
       if (path.transitionId) seenStairGroups.add(path.transitionId);
       if (path.nodeIds.length !== 2 || !transition || transition.kind !== 'stair' ||
-          edgeKey(transition.nodeIds[0], transition.nodeIds[1]) !== edgeKey(path.nodeIds[0]!, path.nodeIds[1]!)) {
-        errors.push(`stair path ${path.id} must reference its matching stair transition`);
+          transition.nodeIds[0] !== path.nodeIds[0] || transition.nodeIds[1] !== path.nodeIds[1]) {
+        errors.push(`stair path ${path.id} must reference its matching stair transition and ordered stair landing pair`);
       }
     } else if (path.transitionId !== undefined) {
       errors.push(`regular path ${path.id} cannot reference a transition`);

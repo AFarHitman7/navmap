@@ -4,6 +4,13 @@ import { addDrawnPathV5, type PathVertexV5 } from './paths';
 
 export type Endpoint = string | { nodeId: string } | { frameId: string; position: Position; name?: string };
 
+function positionDelta(a: Position, b: Position): number | null {
+  if (a.kind !== b.kind) return null;
+  if (a.kind === 'local' && b.kind === 'local') return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  if (a.kind === 'geographic' && b.kind === 'geographic') return Math.max(Math.abs(a.lat - b.lat), Math.abs(a.lng - b.lng));
+  return null;
+}
+
 function endpoint(draft: MapDraft, value: Endpoint): [MapDraft, MapNode] {
   if (typeof value === 'string' || 'nodeId' in value) {
     const id = typeof value === 'string' ? value : value.nodeId;
@@ -11,6 +18,14 @@ function endpoint(draft: MapDraft, value: Endpoint): [MapDraft, MapNode] {
     if (!node) throw new Error(`Unknown node ${id}`);
     return [draft, node];
   }
+  const existing = draft.nodes
+    .flatMap((node) => {
+      if (node.frameId !== value.frameId) return [];
+      const delta = positionDelta(node.position, value.position);
+      return delta !== null && delta <= 1e-9 ? [{ node, delta }] : [];
+    })
+    .sort((a, b) => a.delta - b.delta || a.node.id.localeCompare(b.node.id))[0]?.node;
+  if (existing) return [draft, existing];
   const next = addNodeAtV5(draft, value.frameId, value.position, value.name);
   return [next, next.nodes.at(-1)!];
 }

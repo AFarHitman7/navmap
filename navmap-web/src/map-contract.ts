@@ -334,8 +334,8 @@ function checkMapRelations(doc: DraftRaw, ctx: z.RefinementCtx, manifest: boolea
           if (stairGroups.has(path.transitionId)) issue(`duplicate stair path group for transition ${path.transitionId}`, ['paths', i, 'transitionId']);
           stairGroups.add(path.transitionId);
           const transition = doc.transitions.find((item) => item.id === path.transitionId);
-          if (!transition || transition.kind !== 'stair' || pairKey(...transition.nodeIds) !== pairKey(path.nodeIds[0]!, path.nodeIds[1]!)) {
-            issue(`stair path ${path.id} must reference its matching stair transition`, ['paths', i, 'transitionId']);
+          if (!transition || transition.kind !== 'stair' || transition.nodeIds[0] !== path.nodeIds[0] || transition.nodeIds[1] !== path.nodeIds[1]) {
+            issue(`stair path ${path.id} must reference its matching stair transition and ordered stair landing pair`, ['paths', i, 'transitionId']);
           }
         }
       } else if (path.transitionId !== undefined) {
