@@ -19,11 +19,13 @@ import {
 
 export interface EditorDocument<T extends AnyDraft = AnyDraft> {
   document: T;
+  /** Monotonically increases whenever reset starts a fresh history session. */
+  sessionGeneration: number;
   dirty: boolean;
   canUndo: boolean;
   canRedo: boolean;
   /** Commit one transaction; false only when the updater throws. No-ops record nothing. */
-  commit: (label: string, next: T | ((prev: T) => T)) => boolean;
+  commit: (label: string, next: T | ((prev: T) => T), expectedSessionGeneration?: number) => boolean;
   undo: () => boolean;
   redo: () => boolean;
   /** Record a server save without overwriting newer local edits or history. */
@@ -34,6 +36,8 @@ export interface EditorDocument<T extends AnyDraft = AnyDraft> {
 
 export function useEditorDocument<T extends AnyDraft>(initial: T): EditorDocument<T> {
   const [state, setState] = useState<HistoryState<T>>(() => createHistory(initial));
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const sessionGenerationRef = useRef(0);
   // Synchronous mirror so commit/undo/redo can report success immediately and
   // always read the latest snapshot, even for back-to-back calls in one tick.
   // Written only from stable callbacks below, never during render.
@@ -44,7 +48,8 @@ export function useEditorDocument<T extends AnyDraft>(initial: T): EditorDocumen
   }, []);
 
   const commit = useCallback(
-    (label: string, next: T | ((prev: T) => T)) => {
+    (label: string, next: T | ((prev: T) => T), expectedSessionGeneration?: number) => {
+      if (expectedSessionGeneration !== undefined && expectedSessionGeneration !== sessionGenerationRef.current) return false;
       let resolved: T;
       try {
         resolved = typeof next === 'function' ? (next as (prev: T) => T)(ref.current.present) : next;
@@ -78,6 +83,9 @@ export function useEditorDocument<T extends AnyDraft>(initial: T): EditorDocumen
 
   const reset = useCallback(
     (next: T) => {
+      const nextGeneration = sessionGenerationRef.current + 1;
+      sessionGenerationRef.current = nextGeneration;
+      setSessionGeneration(nextGeneration);
       sync(createHistory(next));
     },
     [sync],
@@ -85,6 +93,7 @@ export function useEditorDocument<T extends AnyDraft>(initial: T): EditorDocumen
 
   return {
     document: state.present,
+    sessionGeneration,
     dirty: isDirty(state),
     canUndo: canUndoState(state),
     canRedo: canRedoState(state),

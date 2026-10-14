@@ -226,7 +226,7 @@ describe('bounded layout source conversion', () => {
   it('previews a real PDF page, uploads its PNG derivative, and commits assignment to shared history', async () => {
     function EditorHarness() {
       const editor = useEditorDocument(staticDraft());
-      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
         <button type="button" onClick={editor.undo}>Undo assignment</button>
         <output>{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
       </>;
@@ -260,7 +260,7 @@ describe('bounded layout source conversion', () => {
     vi.stubGlobal('fetch', upload);
     function EditorHarness() {
       const editor = useEditorDocument(staticDraft());
-      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
         <output>{editor.document.frames.find((frame) => frame.id === 'frame-b-a-z0')?.background?.assetId}</output>
         <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
       </>;
@@ -284,7 +284,7 @@ describe('bounded layout source conversion', () => {
     })));
     function EditorHarness() {
       const editor = useEditorDocument(staticDraft());
-      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
         <output>{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
         <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
       </>;
@@ -308,7 +308,7 @@ describe('bounded layout source conversion', () => {
     function EditorHarness() {
       const editor = useEditorDocument(mapA);
       return <>
-        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
         <button type="button" onClick={() => editor.reset(mapB)}>Switch map</button>
         <output>{editor.document.venueId}:{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
         <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
@@ -343,7 +343,7 @@ describe('bounded layout source conversion', () => {
     function EditorHarness() {
       const editor = useEditorDocument(initial);
       return <>
-        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
         <button type="button" onClick={() => editor.reset(edited)}>Reload current map</button>
         <output>{editor.document.nodes[0]?.name}:{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
         <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
@@ -366,6 +366,39 @@ describe('bounded layout source conversion', () => {
     await waitFor(() => expect(screen.queryByText('Preparing floor plan…')).not.toBeInTheDocument());
     expect(screen.getByText('Edited during upload:empty')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent(/draft changed during upload/i);
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+
+  it('rejects an upload after reset starts a fresh history session with the same draft object', async () => {
+    let resolveUpload!: (response: Response) => void;
+    const deferredUpload = new Promise<Response>((resolve) => { resolveUpload = resolve; });
+    vi.stubGlobal('fetch', vi.fn(() => deferredUpload));
+    const initial = staticDraft();
+    function EditorHarness() {
+      const editor = useEditorDocument(initial);
+      return <>
+        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
+        <button type="button" onClick={() => editor.reset(initial)}>Reload same snapshot</button>
+        <output>{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
+        <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
+      </>;
+    }
+    const user = userEvent.setup();
+    render(<EditorHarness />);
+    await user.upload(screen.getByLabelText('Choose a PNG or PDF'), fixture('two-page.pdf'));
+    await screen.findByRole('img', { name: /page 1/i });
+    await user.click(screen.getByRole('button', { name: 'Assign page to floor' }));
+    await screen.findByText('Preparing floor plan…');
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await user.click(screen.getByRole('button', { name: 'Reload same snapshot' }));
+    resolveUpload({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ assetId: 'a'.repeat(64), width: 600, height: 800,
+        sha256: 'b'.repeat(64), byteLength: 42 }),
+    } as Response);
+    await waitFor(() => expect(screen.queryByText('Preparing floor plan…')).not.toBeInTheDocument());
+    expect(screen.getByText('empty')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
   });
 });

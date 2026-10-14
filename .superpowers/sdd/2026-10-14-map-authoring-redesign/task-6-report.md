@@ -77,3 +77,15 @@ TDD evidence:
 - Final full verification: `npm test` — **22 files, 218 tests passed**; `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed. Build retains the already-recorded 639.03 kB main-entry warning.
 
 Round 1 changed only `navmap-web/src/LayoutImportPanel.tsx`, `navmap-web/src/pdf-import.ts`, and `navmap-web/test/layout-import.test.tsx` in addition to this report. No hook/history code was duplicated or modified; `useEditorDocument` remains the transaction owner. The V4 editor remains unwired.
+
+## Round 2 re-review fix
+
+Read `.superpowers/sdd/2026-10-14-map-authoring-redesign/artifacts/task-6-rereview-1.md`. The new Important finding was reproduced: after starting a deferred upload, `reset(initial)` with the exact same immutable draft object retained snapshot identity, allowing an old operation to target a fresh history session.
+
+- Added `sessionGeneration` to `useEditorDocument`, monotonically incremented on every `reset`, including same-object resets. `commit` accepts an optional expected generation and rejects stale transactions before resolving their updater.
+- `LayoutImportPanel` requires the hook's generation, keys its session state by generation (aborting transport and clearing preview/calibration/selection when a session resets), and passes the captured generation into the history commit as a second guard. Existing fake/test panel integrations now pass the real hook generation.
+- RED: the deferred upload → `reset(initial)` → response regression failed because the upload assigned a background into the new history session. The regression now passes and verifies the background remains empty, preview is cleared, and Undo remains disabled. A hook-level test also proves a stale expected generation cannot commit when the exact same snapshot object is reused.
+- Focused verification: `npm test -- --run test/editor-history.test.tsx test/layout-import.test.tsx test/layout-calibration.test.ts` — **39 tests passed**; `npm run typecheck` passed.
+- Final verification after implementation: `npm test` — **22 files, 220 tests passed**; `npm run typecheck` and `npm run lint` passed without warnings. An initial lint pass caught render-time access to the generation ref; generation is now mirrored in React state for rendering while the ref remains the synchronous commit guard.
+
+Round 2 is scoped to `useEditorDocument.ts`, `LayoutImportPanel.tsx`, the import/history tests, and this report. No broad history refactor, agents, push, or V4 wiring.

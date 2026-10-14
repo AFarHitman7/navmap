@@ -124,6 +124,23 @@ describe('useEditorDocument', () => {
     expect(result.current.canUndo).toBe(false);
     expect(result.current.dirty).toBe(false);
   });
+
+  it('invalidates commits captured before a reset, even when reset reuses the same snapshot', () => {
+    const first = structuredClone(fixture) as DraftV3;
+    const { result } = renderHook(() => useEditorDocument(first));
+    const capturedGeneration = result.current.sessionGeneration;
+    act(() => result.current.reset(first));
+    expect(result.current.sessionGeneration).toBe(capturedGeneration + 1);
+    act(() => {
+      expect(result.current.commit('Stale import', (prev) => ({
+        ...prev,
+        nodes: prev.nodes.map((node, index) => index === 0 ? { ...node, name: 'Stale import' } : node),
+      }), capturedGeneration)).toBe(false);
+    });
+    expect(result.current.document).toBe(first);
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.dirty).toBe(false);
+  });
 });
 
 describe('UnsavedChangesDialog', () => {

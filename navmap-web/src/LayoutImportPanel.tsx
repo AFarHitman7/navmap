@@ -4,16 +4,17 @@ import { assignBackground, calibrateFrame } from './editor-v3/model';
 import { uploadLayout } from './layout-api';
 import type { LayoutSource } from './pdf-import';
 
-type Commit = (label: string, next: MapDraft | ((previous: MapDraft) => MapDraft)) => boolean;
+type Commit = (label: string, next: MapDraft | ((previous: MapDraft) => MapDraft), expectedSessionGeneration?: number) => boolean;
 
 export interface LayoutImportPanelProps {
   venueId: string;
   draft: MapDraft;
+  sessionGeneration: number;
   commit: Commit;
 }
 
 export function LayoutImportPanel(props: LayoutImportPanelProps) {
-  const identity = JSON.stringify([props.venueId, props.draft.venueId]);
+  const identity = JSON.stringify([props.venueId, props.draft.venueId, props.sessionGeneration]);
   return <LayoutImportPanelSession key={identity} {...props} />;
 }
 
@@ -24,7 +25,7 @@ function frameLabel(frame: MapFrame, draft: MapDraft): string {
   return `${zone?.name ?? 'Outdoor'} · ${floor ?? fallback}`;
 }
 
-function LayoutImportPanelSession({ venueId, draft, commit }: LayoutImportPanelProps) {
+function LayoutImportPanelSession({ venueId, draft, sessionGeneration, commit }: LayoutImportPanelProps) {
   const [source, setSource] = useState<LayoutSource | null>(null);
   const [sourceName, setSourceName] = useState('');
   const [page, setPage] = useState(1);
@@ -128,7 +129,7 @@ function LayoutImportPanelSession({ venueId, draft, commit }: LayoutImportPanelP
             throw new Error('The active map or draft changed during the upload');
           }
           return assignBackground(current, target.id, asset);
-        });
+        }, sessionGeneration);
       if (!committed) setError('The active map or draft changed during upload. The image was uploaded but not assigned; review the map and retry.');
       else setPreviewFrameId(target.id);
     } catch (cause) {
