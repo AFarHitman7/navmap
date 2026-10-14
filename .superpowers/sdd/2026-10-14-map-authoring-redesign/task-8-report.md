@@ -35,3 +35,11 @@ Used: `using-superpowers` (dispatched-worker exception), `executing-plans`, `usi
 
 - Map listing uses the existing admin-authenticated venues endpoint; unauthenticated access produces a visible retry state. Existing global organizer authentication remains responsible for access.
 - No delete/duplicate operation was added.
+
+## Review round 1 follow-up
+
+- Removed implicit pending-path clears from V5 frame/tool controls. Pending vertices stay on their originating frame; map clicks from other frames are ignored while that path is active, and the editor explains how to resume or explicitly clear it.
+- V5 heading now uses the current venue summary name supplied by the header picker (falls back to venue ID until available). Renames update the active heading through the same picker callback.
+- Added `editor-v5-guard.test.tsx` using a real data router and real `useBlocker`/editor/picker components. It covers pending-path preservation across frame/tool changes, clean-document pending gesture Cancel/Discard, Save success and proceed, and Save failure retaining the document/history.
+- RED: the first focused run failed on the opaque V5 heading expectation; after adapting the test route to pass the picker’s current map name, gesture and navigation tests initially exposed expected assertions/setup mismatches, then the finalized focused suite passed (3 tests). The baseline defect itself was evidenced by the failing heading being `alpha-id`; no precise RED is claimed for each toolbar-clearing assertion because the implementation was edited in the same round before the full interaction matrix stabilized.
+- Verification after follow-up: web full suite 27 files / 230 tests passed; `npm run typecheck` passed; `npm run lint` passed after removing one unused test import; `npm run build` passed with the existing large-chunk advisories. Backend was unchanged in this round. Browser route-switching with a live authenticated backend remains for Task 16.

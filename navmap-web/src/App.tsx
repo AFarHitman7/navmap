@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet, RouterProvider, createBrowserRouter, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, RouterProvider, createBrowserRouter, useOutletContext, useParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { Icon } from './editor/Icon';
 import { OrganizerV3 } from './OrganizerV3';
@@ -9,6 +9,7 @@ import { MapPicker } from './maps/MapPicker';
 
 function Layout() {
   const { venueId = 'demo' } = useParams();
+  const [mapName, setMapName] = useState('');
   return (
     <div className="app">
       <header className="app-header">
@@ -24,11 +25,11 @@ function Layout() {
           <NavLink to={venueId === 'demo' ? '/' : `/editor/${encodeURIComponent(venueId)}`} end>Editor</NavLink>
           <NavLink to={`/v/${encodeURIComponent(venueId)}`}>Visitor</NavLink>
         </nav>
-        <MapPicker currentId={venueId} />
+        <MapPicker currentId={venueId} onCurrentNameChange={setMapName} />
         <span className="header-caption">VENUE WAYFINDING</span>
       </header>
       <main>
-        <Outlet />
+        <Outlet context={{ mapName }} />
       </main>
     </div>
   );
@@ -36,6 +37,7 @@ function Layout() {
 
 function VenueEditorRoute() {
   const { venueId = 'demo' } = useParams();
+  const { mapName } = useOutletContext<{ mapName: string }>();
   const [route, setRoute] = useState<'loading' | 'legacy' | 'v5'>('loading');
   useEffect(() => {
     let live = true;
@@ -46,7 +48,7 @@ function VenueEditorRoute() {
   }, [venueId]);
   if (route === 'loading') return <section className="page-state" role="status"><h1>Opening map</h1><span className="loading-dot" /></section>;
   return route === 'v5'
-    ? <OrganizerV5 key={`v5:${venueId}`} venueId={venueId} />
+    ? <OrganizerV5 key={`v5:${venueId}`} venueId={venueId} mapName={mapName} />
     : <OrganizerV3 key={`v3:${venueId}`} venueId={venueId} />;
 }
 

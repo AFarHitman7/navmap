@@ -11,7 +11,7 @@ import { UnsavedChangesDialog } from './editor/UnsavedChangesDialog';
 
 type Tool = 'select' | 'place-node' | 'draw-path' | 'move';
 
-export function OrganizerV5({ venueId }: { venueId: string }) {
+export function OrganizerV5({ venueId, mapName = '' }: { venueId: string; mapName?: string }) {
   const [initial, setInitial] = useState<MapDraft | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [error, setError] = useState('');
@@ -33,13 +33,13 @@ export function OrganizerV5({ venueId }: { venueId: string }) {
   }, [venueId]);
   if (error) return <section className="page-state" role="alert"><h1>Map unavailable</h1><p>{error}</p></section>;
   if (!initial) return <section className="page-state" role="status"><h1>Loading map</h1><span className="loading-dot" /></section>;
-  return <V5Editor key={venueId} initial={initial} enabled={enabled} status={status} setStatus={setStatus}
+  return <V5Editor key={venueId} initial={initial} enabled={enabled} mapName={mapName} status={status} setStatus={setStatus}
     tool={tool} setTool={setTool} activeFrameId={activeFrameId} setActiveFrameId={setActiveFrameId}
     pending={pending} setPending={setPending} name={name} setName={setName} busy={busy} setBusy={setBusy} />;
 }
 
-function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFrameId, pending, setPending, name, setName, busy, setBusy, status, setStatus }: {
-  initial: MapDraft; enabled: boolean; tool: Tool; setTool: (tool: Tool) => void; activeFrameId: string; setActiveFrameId: (id: string) => void;
+function V5Editor({ initial, enabled, mapName, tool, setTool, activeFrameId, setActiveFrameId, pending, setPending, name, setName, busy, setBusy, status, setStatus }: {
+  initial: MapDraft; enabled: boolean; mapName: string; tool: Tool; setTool: (tool: Tool) => void; activeFrameId: string; setActiveFrameId: (id: string) => void;
   pending: PathVertexV5[]; setPending: (vertices: PathVertexV5[]) => void; name: string; setName: (name: string) => void;
   busy: boolean; setBusy: (busy: boolean) => void; status: string; setStatus: (status: string) => void;
 }) {
@@ -56,7 +56,7 @@ function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFra
         commit('Place node', (current) => addNodeAtV5(current, frameId, position));
         return;
       }
-      if (tool === 'draw-path') setPending([...pending, { frameId, position }]);
+      if (tool === 'draw-path' && pending.every((vertex) => vertex.frameId === frameId)) setPending([...pending, { frameId, position }]);
     },
     onNodeMove(nodeId: string, position: Position, frameId: string) {
       if (canAuthor) commit('Move node', (current) => moveNodeV5(current, nodeId, frameId, position));
@@ -87,7 +87,7 @@ function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFra
     else { setPending([]); setName(''); setTool('select'); setStatus('Path added'); }
   }
   return <main className="v5-editor" aria-label="Map editor">
-    <header className="v5-editor-header"><div><p className="eyebrow">MAP AUTHORING · V5</p><h1>{draft.venueId}</h1><p>{draft.canvas.kind === 'static' ? 'Static floor plan' : 'Geographic map'} · {doc.dirty ? 'Unsaved changes' : 'Saved'}</p></div>
+    <header className="v5-editor-header"><div><p className="eyebrow">MAP AUTHORING · V5</p><h1>{mapName || draft.venueId}</h1><p>{draft.canvas.kind === 'static' ? 'Static floor plan' : 'Geographic map'} · {doc.dirty ? 'Unsaved changes' : 'Saved'}</p></div>
       <div className="workspace-actions"><button type="button" disabled={!doc.canUndo || busy} onClick={doc.undo}>Undo</button><button type="button" disabled={!doc.canRedo || busy} onClick={doc.redo}>Redo</button><button type="button" disabled={!enabled || busy || !doc.dirty} onClick={() => void save()}>Save</button><button type="button" className="primary" disabled={!enabled || busy} onClick={() => void publish()}>Publish</button></div>
     </header>
     <UnsavedChangesDialog open={blocker.state === 'blocked'} busy={busy} saveDisabled={pending.length > 0} saveError={pending.length ? 'Finish or clear the current drawing before saving.' : status.startsWith('Save failed') ? status : null}
@@ -96,15 +96,15 @@ function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFra
     <section className="v5-editor-layout">
       <div className="v5-canvas-column">
         <div className="v5-toolbar" aria-label="Map tools">
-          {draft.frames.map((candidate) => <button key={candidate.id} type="button" aria-pressed={candidate.id === activeFrameId} onClick={() => { setActiveFrameId(candidate.id); setPending([]); }}>{candidate.zoneId ? `${draft.indoorZones.find((z) => z.id === candidate.zoneId)?.name ?? 'Building'} · ${candidate.z}` : 'Outdoor'}{candidate.background ? '' : ' · no plan'}</button>)}
+          {draft.frames.map((candidate) => <button key={candidate.id} type="button" aria-pressed={candidate.id === activeFrameId} onClick={() => setActiveFrameId(candidate.id)}>{candidate.zoneId ? `${draft.indoorZones.find((z) => z.id === candidate.zoneId)?.name ?? 'Building'} · ${candidate.z}` : 'Outdoor'}{candidate.background ? '' : ' · no plan'}</button>)}
           <span className="v5-tool-spacer" />
-          {(['select', 'place-node', 'draw-path', 'move'] as const).map((kind) => <button key={kind} type="button" aria-pressed={tool === kind} disabled={!enabled && kind !== 'select'} onClick={() => { setTool(kind); setPending([]); }}>{kind === 'place-node' ? 'Node' : kind === 'draw-path' ? 'Path' : kind === 'move' ? 'Move' : 'Select'}</button>)}
+          {(['select', 'place-node', 'draw-path', 'move'] as const).map((kind) => <button key={kind} type="button" aria-pressed={tool === kind} disabled={!enabled && kind !== 'select'} onClick={() => setTool(kind)}>{kind === 'place-node' ? 'Node' : kind === 'draw-path' ? 'Path' : kind === 'move' ? 'Move' : 'Select'}</button>)}
         </div>
         <div className="v5-map-frame">
           <CanvasHost document={draft} view="editor" activeFrameId={activeFrameId} mode={tool} callbacks={callbacks} />
           {draft.canvas.kind === 'static' && !frame?.background && <div className="v5-unassigned-guidance">Add a plan to this floor before placing nodes or paths.</div>}
         </div>
-        <p className="v5-status" role="status">{status || (tool === 'place-node' ? 'Click the map to place a node.' : tool === 'draw-path' ? `${pending.length} points · click to continue` : 'Choose a floor and edit its map.')}</p>
+        <p className="v5-status" role="status">{status || (tool === 'place-node' ? 'Click the map to place a node.' : tool === 'draw-path' ? pending.length > 0 && pending[0].frameId !== activeFrameId ? 'Path is on another floor. Return to that floor to continue, or clear the points.' : `${pending.length} points · click to continue` : 'Choose a floor and edit its map.')}</p>
       </div>
       <aside className="v5-inspector">
         {draft.canvas.kind === 'static' && enabled && <LayoutImportPanel venueId={draft.venueId} draft={draft} sessionGeneration={doc.sessionGeneration} commit={doc.commit} />}

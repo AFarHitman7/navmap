@@ -11,7 +11,7 @@ async function loadMaps(signal?: AbortSignal) {
   return { maps, canCreate: capabilities.mapV5AuthoringEnabled };
 }
 
-export function MapPicker({ currentId }: { currentId: string }) {
+export function MapPicker({ currentId, onCurrentNameChange }: { currentId: string; onCurrentNameChange?: (name: string) => void }) {
   const [maps, setMaps] = useState<VenueSummary[]>([]);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
@@ -42,6 +42,7 @@ export function MapPicker({ currentId }: { currentId: string }) {
     finally { setBusy(false); }
   }
   const current = maps.find((map) => map.id === currentId);
+  useEffect(() => { onCurrentNameChange?.(current?.name ?? ''); }, [current?.name, onCurrentNameChange]);
   async function rename() {
     setBusy(true);
     try { const updated = await renameMap(currentId, renameValue); setMaps((items) => items.map((item) => item.id === currentId ? updated : item)); setRenameOpen(false); }
