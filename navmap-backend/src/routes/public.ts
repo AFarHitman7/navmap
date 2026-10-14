@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { getLatestVersion } from '../db.js';
 import { draftSchemaVersion, parseManifestV3 } from '../draft.js';
+import { LAYOUT_ASSET_ID_RE, readLayoutAsset } from '../layout-assets.js';
 import { parseMapManifest } from '../map-contract.js';
 import { isV5AuthoringEnabled } from '../env.js';
 import { normalizeVenueId } from '../venue-id.js';
@@ -34,7 +35,7 @@ function loadManifestJson(db: DatabaseSync, venueId: string, version: number): s
   return row.manifest_json;
 }
 
-export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): void {
+export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync, opts: { dataDir: string }): void {
   app.get('/api/capabilities', async () => ({ mapV5AuthoringEnabled: isV5AuthoringEnabled() }));
 
   app.get('/api/venues/:venueId/latest', async (req, reply) => {
@@ -61,4 +62,80 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): vo
       return reply.code((err as { statusCode?: number }).statusCode ?? 404).send({ error: (err as Error).message });
     }
   });
+
+  // Immutable manifest-scoped public assets: serves canonical bytes only for
+  // assets referenced by the stored manifest of that exact version, with the
+  // manifest's claimed metadata cross-checked against the venue-owned
+  // registry (forged claims fail closed with 404). V4 manifests reference no
+  // assets, so their responses are unchanged.
+  app.get('/api/venues/:venueId/versions/:version/assets/:assetId', async (req, reply) => {
+    const { venueId, version: rawVersion, assetId } = req.params as {
+      venueId: string;
+      version: string;
+      assetId: string;
+    };
+    const version = Number(rawVersion);
+    if (!Number.isInteger(version) || version <= 0) return reply.code(404).send({ error: 'unknown version' });
+    try {
+      normalizeVenueId(venueId);
+    } catch {
+      return reply.code(404).send({ error: 'unknown venue' });
+    }
+    if (!LAYOUT_ASSET_ID_RE.test(assetId)) return reply.code(404).send({ error: 'unknown layout asset' });
+    const row = db
+      .prepare('SELECT manifest_json FROM versions WHERE venue_id = ? AND version = ?')
+      .get(venueId, version) as { manifest_json: string } | undefined;
+    if (!row) return reply.code(404).send({ error: 'unknown version' });
+    const claim = manifestBackgroundClaim(row.manifest_json, assetId);
+    if (!claim) return reply.code(404).send({ error: 'unknown layout asset' });
+    try {
+      const { bytes, asset } = readLayoutAsset(db, opts.dataDir, venueId, assetId);
+      if (
+        claim.sha256.toLowerCase() !== asset.sha256 ||
+        claim.width !== asset.width ||
+        claim.height !== asset.height ||
+        claim.byteLength !== asset.byteLength
+      ) {
+        return reply.code(404).send({ error: 'unknown layout asset' });
+      }
+      reply.header('content-type', 'image/png');
+      reply.header('x-content-type-options', 'nosniff');
+      reply.header('cache-control', 'public, max-age=31536000, immutable');
+      reply.header('etag', `"${asset.sha256}"`);
+      return reply.send(bytes);
+    } catch (err) {
+      return reply.code((err as { statusCode?: number }).statusCode ?? 404).send({ error: (err as Error).message });
+    }
+  });
+}
+
+/**
+ * Find the manifest's background claim for one asset ID. Returns null when
+ * the stored manifest does not reference the asset (including every V4
+ * manifest, which carries no frame backgrounds).
+ */
+function manifestBackgroundClaim(
+  manifestJson: string,
+  assetId: string,
+): { width: number; height: number; sha256: string; byteLength: number } | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(manifestJson);
+  } catch {
+    return null;
+  }
+  if (draftSchemaVersion(json) !== 5) return null;
+  let manifest;
+  try {
+    manifest = parseMapManifest(json);
+  } catch {
+    return null;
+  }
+  for (const frame of manifest.frames) {
+    const bg = frame.background;
+    if (bg && bg.assetId === assetId) {
+      return { width: bg.width, height: bg.height, sha256: bg.sha256, byteLength: bg.byteLength };
+    }
+  }
+  return null;
 }

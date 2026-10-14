@@ -27,7 +27,10 @@ export function registerAdminRoutes(
     if (!url.startsWith('/api/admin/') || url === '/api/admin/login') return;
     const { token, viaCookie } = extractToken(req.headers.cookie, req.headers.authorization);
     if (!checkSession(db, token)) return reply.code(401).send({ error: 'login required' });
-    if (viaCookie && ['PUT', 'POST', 'PATCH', 'DELETE'].includes(req.method) && req.headers['content-type']?.includes('json')) {
+    // Foreign-origin protection covers every cookie-authenticated write,
+    // regardless of content type (JSON, multipart, or otherwise): a browser
+    // holding the session cookie must present a same-origin Origin header.
+    if (viaCookie && ['PUT', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
       const origin = req.headers.origin;
       const host = req.headers.host;
       const forwarded = req.headers['x-forwarded-host'];

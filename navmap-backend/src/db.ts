@@ -126,6 +126,15 @@ export function initializeSchema(db: DatabaseSync): void {
       revision INTEGER NOT NULL,
       PRIMARY KEY (venue_id, node_id)
     );
+    CREATE TABLE IF NOT EXISTS layout_assets (
+      venue_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      width INTEGER NOT NULL,
+      height INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      byte_length INTEGER NOT NULL,
+      PRIMARY KEY (venue_id, asset_id)
+    );
   `);
   const venueRow = db.prepare('SELECT id FROM venues WHERE id = ?').get(DEMO_VENUE_ID) as
     | { id: string }
