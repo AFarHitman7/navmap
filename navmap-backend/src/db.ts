@@ -182,8 +182,10 @@ export function cleanupOrphanVersions(db: DatabaseSync, dataDir: string): void {
         continue;
       }
       if (stat.isSymbolicLink()) continue;
-      if (entry.endsWith('.tmp')) {
-        if (!/^\d+\.tmp$/.test(entry)) continue;
+      if (entry.endsWith('.tmp') || /\.tmp-/.test(entry)) {
+        // V5 staging dirs include an unpredictable attempt token, and can be
+        // removed after restart because they were never DB-visible versions.
+        if (!/^\d+\.tmp(?:-[a-f0-9-]+)?$/.test(entry)) continue;
         fs.rmSync(full, { recursive: true, force: true });
         continue;
       }

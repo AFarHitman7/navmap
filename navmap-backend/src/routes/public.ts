@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { getLatestVersion } from '../db.js';
@@ -7,6 +8,7 @@ import { LAYOUT_ASSET_ID_RE, readLayoutAsset } from '../layout-assets.js';
 import { parseMapManifest } from '../map-contract.js';
 import { isV5AuthoringEnabled } from '../env.js';
 import { normalizeVenueId } from '../venue-id.js';
+import { versionAssetPath } from '../version-dir.js';
 
 /**
  * Load the stored manifest JSON after validating its schema. V4 documents
@@ -89,13 +91,17 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync, opt
     const claim = manifestBackgroundClaim(row.manifest_json, assetId);
     if (!claim) return reply.code(404).send({ error: 'unknown layout asset' });
     try {
-      const { bytes, asset } = readLayoutAsset(db, opts.dataDir, venueId, assetId);
+      const { asset } = readLayoutAsset(db, opts.dataDir, venueId, assetId);
       if (
         claim.sha256.toLowerCase() !== asset.sha256 ||
         claim.width !== asset.width ||
         claim.height !== asset.height ||
         claim.byteLength !== asset.byteLength
       ) {
+        return reply.code(404).send({ error: 'unknown layout asset' });
+      }
+      const bytes = fs.readFileSync(versionAssetPath(opts.dataDir, venueId, version, assetId));
+      if (bytes.length !== asset.byteLength || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) {
         return reply.code(404).send({ error: 'unknown layout asset' });
       }
       reply.header('content-type', 'image/png');

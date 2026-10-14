@@ -477,7 +477,7 @@ describe('layout assets', () => {
   });
 
   it('serves public assets only when the stored manifest references them', async () => {
-    const { db, app } = testContext();
+    const { db, app, dataDir } = testContext();
     try {
       const { cookie } = await login(app);
       const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: { r: 7, g: 7, b: 7 } } }).png().toBuffer();
@@ -501,6 +501,9 @@ describe('layout assets', () => {
         profiles: [],
       };
       db.prepare('INSERT INTO versions (venue_id, version, manifest_json) VALUES (?, ?, ?)').run('demo', 1, JSON.stringify(manifest));
+      const publishedAssetDir = path.join(dataDir, 'versions', 'demo', '1', 'assets');
+      fs.mkdirSync(publishedAssetDir, { recursive: true });
+      fs.copyFileSync(path.join(dataDir, 'layout-assets', 'demo', `${asset.assetId}.png`), path.join(publishedAssetDir, `${asset.assetId}.png`));
       const pub = await app.inject({ method: 'GET', url: `/api/venues/demo/versions/1/assets/${asset.assetId}` });
       expect(pub.statusCode).toBe(200);
       expect(pub.headers['content-type']).toContain('image/png');

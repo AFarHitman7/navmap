@@ -233,9 +233,8 @@ export function validateGraphV5(draft: MapDraft): string[] {
 
 /**
  * Publish-time V5 checks: the shared graph/frame geometry checks plus
- * publication-only prerequisites — the geographic boundary requirement and
- * the static asset gate (static publication stays rejected until frame
- * assets are verified in a later task).
+ * publication-only prerequisite: the geographic boundary requirement. Static
+ * asset validation is performed by publishV3 against venue-owned bytes.
  */
 export function validatePublishV5(draft: MapDraft): string[] {
   const errors: string[] = [];
@@ -243,9 +242,6 @@ export function validatePublishV5(draft: MapDraft): string[] {
     errors.push('venue needs an outdoor boundary');
   }
   errors.push(...validateGraphV5(draft));
-  if (draft.canvas.kind === 'static') {
-    errors.push('static publication requires verified frame assets');
-  }
   return errors;
 }
 
