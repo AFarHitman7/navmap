@@ -595,6 +595,8 @@ export function removeNodeV5(draft: MapDraft, id: string): MapDraft {
   if (place) throw new Error(`Delete the place ${place.name} on this point first`);
   const anchor = draft.anchors.find((a) => a.nodeId === id);
   if (anchor) throw new Error(`Delete the anchor ${anchor.label} on this point first`);
+  const transition = draft.transitions.find((item) => item.nodeIds.includes(id));
+  if (transition) throw new Error(`Delete the ${transition.kind} transition ${transition.name} first`);
   requireNodeV5(draft, id);
   return parseMapDraft({
     ...draft,
@@ -686,6 +688,167 @@ export function invalidateFrameNodesV5(draft: MapDraft, frameId: string): MapDra
     ...draft,
     nodes: draft.nodes.map((n) => (n.frameId === frameId ? { ...n, fingerprintRevision: n.fingerprintRevision + 1 } : n)),
   });
+}
+
+/** Delete a path group and only its exclusively-owned generated routing geometry. */
+export function removePathV5(draft: MapDraft, id: string): MapDraft {
+  const path = (draft.paths ?? []).find((item) => item.id === id);
+  if (!path) throw new Error(`Unknown path ${id}`);
+  if (path.kind === 'stair') throw new Error('Delete the stair transition to remove its stair path.');
+  const pathPairs = new Set(path.nodeIds.slice(1).map((nodeId, index) => {
+    const a = path.nodeIds[index]!;
+    return a < nodeId ? `${a}\0${nodeId}` : `${nodeId}\0${a}`;
+  }));
+  const otherPathNodes = new Set((draft.paths ?? []).filter((item) => item.id !== id).flatMap((item) => item.nodeIds));
+  const removable = new Set(path.nodeIds.filter((nodeId) => {
+    const node = draft.nodes.find((item) => item.id === nodeId);
+    if (!node?.generated || otherPathNodes.has(nodeId) || draft.places.some((item) => item.nodeId === nodeId) || draft.anchors.some((item) => item.nodeId === nodeId)) return false;
+    return !draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && !pathPairs.has(edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`));
+  }));
+  const remainingPaths = (draft.paths ?? []).filter((item) => item.id !== id);
+  return parseMapDraft({ ...draft, paths: remainingPaths,
+    edges: draft.edges.filter((edge) => !pathPairs.has(edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`)),
+    nodes: draft.nodes.filter((node) => !removable.has(node.id)),
+  });
+}
+
+/** Update the explicit map extent without moving authored geometry. */
+export function setBoundaryV5(draft: MapDraft, bounds: MapDraft['boundary']): MapDraft {
+  if (!bounds) throw new Error('Map boundary is required');
+  const frames = draft.frames.filter((frame) => frame.zoneId === null);
+  const inside = (p: Position) => p.kind === 'geographic' && bounds.kind === 'geographic'
+    ? p.lat >= bounds.south && p.lat <= bounds.north && p.lng >= bounds.west && p.lng <= bounds.east
+    : p.kind === 'local' && bounds.kind === 'local' && p.x >= bounds.left && p.x <= bounds.right && p.y >= bounds.top && p.y <= bounds.bottom;
+  const outsideNodes = draft.nodes.filter((node) => node.zoneId === null && !inside(node.position));
+  if (outsideNodes.length) throw new Error(`Boundary excludes ${outsideNodes.map((node) => node.name).join(', ')}. Move those points first.`);
+  const outsideBuildings = draft.indoorZones.filter((zone) => zone.bounds && (() => {
+    const building = zone.bounds!;
+    if (building.kind !== bounds.kind) return true;
+    if (building.kind === 'geographic' && bounds.kind === 'geographic') return building.north > bounds.north || building.south < bounds.south || building.east > bounds.east || building.west < bounds.west;
+    if (building.kind === 'local' && bounds.kind === 'local') return building.left < bounds.left || building.top < bounds.top || building.right > bounds.right || building.bottom > bounds.bottom;
+    return true;
+  })());
+  if (outsideBuildings.length) throw new Error(`Boundary excludes ${outsideBuildings.map((zone) => zone.name).join(', ')}. Resize those buildings first.`);
+  const frameOutside = (frame: MapFrame) => {
+    if (frame.bounds.kind !== bounds.kind) return true;
+    if (bounds.kind === 'geographic' && frame.bounds.kind === 'geographic') return frame.bounds.north > bounds.north || frame.bounds.south < bounds.south || frame.bounds.east > bounds.east || frame.bounds.west < bounds.west;
+    if (bounds.kind === 'local' && frame.bounds.kind === 'local') return frame.bounds.left < bounds.left || frame.bounds.top < bounds.top || frame.bounds.right > bounds.right || frame.bounds.bottom < bounds.bottom;
+    return true;
+  };
+  if (frames.some(frameOutside)) {
+    throw new Error('Boundary must contain every outdoor frame. Resize those frames first.');
+  }
+  return parseMapDraft({ ...draft, boundary: bounds });
+}
+
+function uniqueV5Id(base: string, ids: string[]): string {
+  if (!ids.includes(base)) return base;
+  for (let n = 2; ; n++) if (!ids.includes(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+/** Add a building and its first floor/frame in one history transaction. */
+export function addBuildingV5(draft: MapDraft, name: string, bounds: MapDraft['boundary']): MapDraft {
+  const clean = name.trim();
+  if (!clean || !bounds) throw new Error('Building name and bounds are required');
+  const contained = (outer: NonNullable<MapDraft['boundary']>, inner: NonNullable<MapDraft['boundary']>) => {
+    if (outer.kind !== inner.kind) return false;
+    if (outer.kind === 'geographic' && inner.kind === 'geographic') return inner.north <= outer.north && inner.south >= outer.south && inner.east <= outer.east && inner.west >= outer.west;
+    if (outer.kind === 'local' && inner.kind === 'local') return inner.left >= outer.left && inner.top >= outer.top && inner.right <= outer.right && inner.bottom <= outer.bottom;
+    return false;
+  };
+  if (draft.boundary && !contained(draft.boundary, bounds)) {
+    throw new Error(`Building ${clean} is outside the map boundary`);
+  }
+  const overlap = (a: NonNullable<MapDraft['boundary']>, b: NonNullable<MapDraft['boundary']>) => {
+    if (a.kind === 'geographic' && b.kind === 'geographic') return a.west < b.east && a.east > b.west && a.south < b.north && a.north > b.south;
+    if (a.kind === 'local' && b.kind === 'local') return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    return false;
+  };
+  if (draft.indoorZones.some((zone) => zone.bounds && overlap(zone.bounds, bounds))) throw new Error(`Building ${clean} overlaps another building`);
+  const slug = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'building';
+  const zoneId = uniqueV5Id(`b-${slug}`, draft.indoorZones.map((zone) => zone.id));
+  const floor = { z: 0, label: 'Ground' };
+  const frameId = uniqueV5Id(`frame-${zoneId}-z0`, draft.frames.map((frame) => frame.id));
+  return parseMapDraft({ ...draft,
+    indoorZones: [...draft.indoorZones, { id: zoneId, name: clean, bounds, floors: [floor] }],
+    frames: [...draft.frames, { id: frameId, zoneId, z: 0, bounds }],
+  });
+}
+
+export function renameBuildingV5(draft: MapDraft, zoneId: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Building name is required');
+  if (!draft.indoorZones.some((zone) => zone.id === zoneId)) throw new Error(`Unknown building ${zoneId}`);
+  return parseMapDraft({ ...draft,
+    indoorZones: draft.indoorZones.map((zone) => zone.id === zoneId ? { ...zone, name: clean } : zone),
+  });
+}
+
+export function addFloorV5(draft: MapDraft, zoneId: string, z: number, label: string): MapDraft {
+  const zone = draft.indoorZones.find((item) => item.id === zoneId);
+  if (!zone) throw new Error(`Unknown building ${zoneId}`);
+  const clean = label.trim();
+  if (!Number.isInteger(z) || !clean) throw new Error('Enter a floor number and label');
+  if (zone.floors.some((floor) => floor.z === z)) throw new Error(`Building ${zone.name} already has floor ${z}`);
+  const bounds = zone.bounds ?? draft.frames.find((frame) => frame.zoneId === zoneId)?.bounds;
+  if (!bounds) throw new Error('Set the building bounds before adding a floor');
+  const frameId = uniqueV5Id(`frame-${zoneId}-z${z}`, draft.frames.map((frame) => frame.id));
+  return parseMapDraft({ ...draft,
+    indoorZones: draft.indoorZones.map((item) => item.id === zoneId ? { ...item, floors: [...item.floors, { z, label: clean }].sort((a, b) => a.z - b.z) } : item),
+    frames: [...draft.frames, { id: frameId, zoneId, z, bounds }],
+  });
+}
+
+export function renameFloorV5(draft: MapDraft, zoneId: string, z: number, label: string): MapDraft {
+  const clean = label.trim();
+  if (!clean) throw new Error('Floor label is required');
+  const zone = draft.indoorZones.find((item) => item.id === zoneId);
+  if (!zone?.floors.some((floor) => floor.z === z)) throw new Error(`Unknown floor ${z}`);
+  return parseMapDraft({ ...draft, indoorZones: draft.indoorZones.map((item) => item.id === zoneId
+    ? { ...item, floors: item.floors.map((floor) => floor.z === z ? { ...floor, label: clean } : floor) } : item) });
+}
+
+export function removeFloorV5(draft: MapDraft, zoneId: string, z: number): MapDraft {
+  const zone = draft.indoorZones.find((item) => item.id === zoneId);
+  if (!zone?.floors.some((floor) => floor.z === z)) throw new Error(`Unknown floor ${z}`);
+  if (zone.floors.length < 2) throw new Error(`Building ${zone.name} needs at least one floor`);
+  const frame = draft.frames.find((item) => item.zoneId === zoneId && item.z === z);
+  if (frame && draft.nodes.some((node) => node.frameId === frame.id)) throw new Error(`Floor ${z} still has nodes. Move or delete them first.`);
+  if (frame && draft.transitions.some((transition) => transition.nodeIds.some((id) => draft.nodes.find((node) => node.id === id)?.frameId === frame.id))) throw new Error(`Floor ${z} is used by a transition.`);
+  return parseMapDraft({ ...draft,
+    indoorZones: draft.indoorZones.map((item) => item.id === zoneId ? { ...item, floors: item.floors.filter((floor) => floor.z !== z) } : item),
+    frames: draft.frames.filter((item) => item.id !== frame?.id),
+  });
+}
+
+export function renamePathV5(draft: MapDraft, id: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Path name is required');
+  if (!(draft.paths ?? []).some((path) => path.id === id)) throw new Error(`Unknown path ${id}`);
+  return parseMapDraft({ ...draft, paths: draft.paths?.map((path) => path.id === id ? { ...path, name: clean } : path) });
+}
+
+export function renameTransitionV5(draft: MapDraft, id: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Transition name is required');
+  if (!draft.transitions.some((transition) => transition.id === id)) throw new Error(`Unknown transition ${id}`);
+  return parseMapDraft({ ...draft, transitions: draft.transitions.map((transition) => transition.id === id ? { ...transition, name: clean } : transition) });
+}
+
+export function editPlaceV5(draft: MapDraft, id: string, updates: { name: string; nodeId: string }): MapDraft {
+  const place = draft.places.find((item) => item.id === id);
+  if (!place) throw new Error(`Unknown place ${id}`);
+  const node = requireNodeV5(draft, updates.nodeId);
+  const name = updates.name.trim();
+  if (!name) throw new Error('Place name is required');
+  if (!node.zoneId) throw new Error('Place must be assigned to an indoor node');
+  if (draft.places.some((item) => item.id !== id && item.nodeId === node.id)) throw new Error(`Node ${node.name} already has a place`);
+  return parseMapDraft({ ...draft, places: draft.places.map((item) => item.id === id ? { ...item, name, nodeId: node.id, zoneId: node.zoneId! } : item) });
+}
+
+export function removePlaceV5(draft: MapDraft, id: string): MapDraft {
+  if (!draft.places.some((item) => item.id === id)) throw new Error(`Unknown place ${id}`);
+  return parseMapDraft({ ...draft, places: draft.places.filter((item) => item.id !== id) });
 }
 
 /** Assign or replace a frame image without moving normalized node positions. */

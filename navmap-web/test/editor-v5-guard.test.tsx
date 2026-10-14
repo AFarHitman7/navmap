@@ -54,30 +54,33 @@ describe('V5 map switching and pending paths', () => {
     mountEditor();
     expect(await screen.findByRole('heading', { name: 'Alpha Hall' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Path', exact: true }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
-    expect(screen.getByText('1 points · click to continue')).toBeTruthy();
+    expect(screen.getByText('1 points · pending path')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Building A · 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
-    expect(screen.getByText('Path is on another floor. Return to that floor to continue, or clear the points.')).toBeTruthy();
+    expect(screen.getByRole('status')).toHaveTextContent('Pending path is on another floor. Return to that floor or discard it.');
     fireEvent.click(screen.getByRole('button', { name: 'Select', exact: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Path', exact: true }));
-    expect(screen.getByText('Path is on another floor. Return to that floor to continue, or clear the points.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Pending path is on another floor. Return to that floor or discard it.');
     fireEvent.click(screen.getByRole('button', { name: 'Building A · 0' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
-    expect(screen.getByText('2 points · click to continue')).toBeTruthy();
+    expect(screen.getByText('2 points · pending path')).toBeTruthy();
   });
 
   it('keeps a clean document with pending gesture on Cancel and requires explicit Discard to switch', async () => {
     mountEditor();
     expect(await screen.findByRole('heading', { name: 'Alpha Hall' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Path', exact: true }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Select map' }), { target: { value: 'beta-id' } });
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(await screen.findByRole('heading', { name: 'Alpha Hall' })).toBeTruthy();
-    expect(screen.getByText('1 points · click to continue')).toBeTruthy();
+    expect(screen.getByText('1 points · pending path')).toBeTruthy();
     fireEvent.change(screen.getByRole('combobox', { name: 'Select map' }), { target: { value: 'beta-id' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }));
     expect(await screen.findByRole('heading', { name: 'Beta Gallery' })).toBeTruthy();
@@ -87,6 +90,7 @@ describe('V5 map switching and pending paths', () => {
     mountEditor();
     expect(await screen.findByRole('heading', { name: 'Alpha Hall' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Node', exact: true }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Select map' }), { target: { value: 'beta-id' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
@@ -97,6 +101,7 @@ describe('V5 map switching and pending paths', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Select map' }), { target: { value: 'alpha-id' } });
     expect(await screen.findByRole('heading', { name: 'Alpha Hall' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Node', exact: true }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Select map' }), { target: { value: 'beta-id' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save changes' }));
@@ -104,6 +109,6 @@ describe('V5 map switching and pending paths', () => {
     expect(screen.getByRole('heading', { name: 'Alpha Hall' })).toBeTruthy();
     expect(screen.getByText('Static floor plan · Unsaved changes')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-    expect(screen.getByText('5 nodes · 2 paths')).toBeTruthy();
+    expect(screen.getByText('Static floor plan · Saved')).toBeTruthy();
   });
 });

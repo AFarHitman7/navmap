@@ -29,7 +29,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
     map.on('click', (event: L.LeafletMouseEvent) => {
       const current = propsRef.current;
       const frame = current.document.frames.find((item) => item.id === current.activeFrameId);
-      if (!frame?.background || (current.mode !== 'place-node' && current.mode !== 'draw-path')) return;
+      if (!frame?.background || (current.mode !== 'place-node' && current.mode !== 'draw-path' && current.mode !== 'endpoints')) return;
       const p = fromLeaflet(event.latlng.lat, event.latlng.lng, frame.background.width, frame.background.height);
       if (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return;
       current.callbacks.onPointClick?.(p, frame.id);
@@ -52,7 +52,10 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
     const byId = new Map(nodes.map((node) => [node.id, node]));
     for (const path of document.paths ?? []) {
       const points = path.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'local' ? [toLeaflet(n.position, frame.background!.width, frame.background!.height)] : []; });
-      if (points.length > 1) L.polyline(points, { color: '#16776c', weight: 3 }).addTo(group);
+      if (points.length > 1) {
+        const line = L.polyline(points, { color: path.kind === 'stair' ? '#b46926' : '#16776c', weight: 4 }).addTo(group);
+        if (view === 'editor') line.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onPathClick?.(path.id); });
+      }
     }
     for (const node of nodes) {
       if (node.position.kind !== 'local' || (view === 'visitor' && !node.visitorVisible)) continue;

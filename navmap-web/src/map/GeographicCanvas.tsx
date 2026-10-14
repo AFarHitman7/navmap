@@ -8,6 +8,7 @@ export type CanvasCallbacks = {
   onNodeMove?: (nodeId: string, position: Position, frameId: string) => void;
   onNodeClick?: (nodeId: string) => void;
   onPathClick?: (pathId: string) => void;
+  onTransitionClick?: (transitionId: string) => void;
 };
 export type CanvasProps = { document: MapDraft | MapManifest; activeFrameId: string; mode: string; callbacks: CanvasCallbacks; view?: 'editor' | 'visitor' | 'survey' };
 
@@ -30,7 +31,7 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
     setMapReady(true);
     map.on('click', (event: L.LeafletMouseEvent) => {
       const now = propsRef.current;
-      if (now.mode !== 'place-node' && now.mode !== 'draw-path') return;
+      if (now.mode !== 'place-node' && now.mode !== 'draw-path' && now.mode !== 'endpoints') return;
       const frame = now.document.frames.find((candidate) => candidate.id === now.activeFrameId);
       if (!frame || frame.bounds.kind !== 'geographic') return;
       const { lat, lng } = event.latlng;
@@ -52,7 +53,10 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
     const byId = new Map(document.nodes.map((node) => [node.id, node]));
     for (const path of document.paths ?? []) {
       const points = path.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'geographic' && n.frameId === activeFrameId ? [[n.position.lat, n.position.lng] as L.LatLngTuple] : []; });
-      if (points.length > 1) L.polyline(points, { color: '#16776c', weight: 3 }).addTo(group);
+      if (points.length > 1) {
+        const line = L.polyline(points, { color: path.kind === 'stair' ? '#b46926' : '#16776c', weight: 4 }).addTo(group);
+        if (view === 'editor') line.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onPathClick?.(path.id); });
+      }
     }
     for (const node of nodes) {
       if (node.position.kind !== 'geographic') continue;

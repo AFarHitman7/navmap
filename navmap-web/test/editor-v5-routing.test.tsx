@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { staticDraft } from '../src/fixtures/map-v5';
 import { getDraftV5 } from '../src/api-v3';
@@ -25,6 +26,7 @@ describe('routed V5 authoring', () => {
     const { default: App } = await import('../src/App');
     render(<App />);
     await waitFor(() => expect(screen.getByRole('heading', { name: 'static-room' })).toBeVisible());
+    await userEvent.click(screen.getByRole('button', { name: 'Floor plans' }));
     expect(screen.getByText('Add a floor plan')).toBeVisible();
     expect(screen.getByRole('button', { name: /Node/ })).toBeVisible();
     expect(screen.getByRole('application', { name: 'Static floor plan' })).toBeVisible();
