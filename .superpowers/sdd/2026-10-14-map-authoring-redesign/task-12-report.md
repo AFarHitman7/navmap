@@ -36,3 +36,11 @@
 - Fixed positioned path endpoint resolution to reuse an existing matching node instead of adding a duplicate; duplicate endpoint and existing overlap validation are covered.
 - Expanded browser evidence for a newly created cross-floor stair pair, stair path association, elevator deletion preserving both endpoint nodes, and V4 legacy-edge delete/undo/redo.
 - Corrected Task 10 assertions and interaction setup: node identity rather than marker totals, mobile map click from the rendered active-frame image transform, and geographic endpoint selection via known node IDs with frame-label assertions.
+
+## Task 12 follow-up (round 2)
+
+- Added Playwright assertions against actual `PUT /draft-v3` payloads. After saving the newly created cross-floor stair pair and its stair path, the test checks the transition's ordered endpoint IDs, the matching stair path's `transitionId` and exact ordered `nodeIds`, the corresponding stairs edge, and that pre-existing regular-path geometry is byte-for-byte equivalent at the object level.
+- For one-endpoint Entrance and Stair gestures, the test asserts Finish is disabled, presses Escape, then saves a deliberate node rename to force a real payload. Saved nodes must equal the prior saved snapshot with only that rename; edges, transitions, and paths must be unchanged. No test-only production API or callback was added.
+- No production defect was confirmed; round 2 closes the direct committed-graph evidence gap identified in `artifacts/task-12-rereview-1.md`.
+- `cd navmap-web && npm run e2e -- e2e/task10-inspector-real-canvas.spec.ts e2e/unified-tools.spec.ts --project=desktop --project=mobile --reporter=line` — 14/14 passed.
+- `cd navmap-web && npm test` — 33 files / 265 tests passed; `npm run typecheck`, `npm run lint`, and `npm run build` passed. Build retains the existing >500 kB chunk warning. `git diff --check` passed with configured LF-to-CRLF warnings only.

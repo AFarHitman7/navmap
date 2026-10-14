@@ -1,10 +1,12 @@
 import { expect, test } from '@playwright/test';
 import { staticDraft } from '../src/fixtures/map-v5';
+import type { MapDraft } from '../src/map-contract';
 
 const transparentPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/Tz8AAAAASUVORK5CYII=', 'base64');
 
 async function openEditor(page: import('@playwright/test').Page) {
   const draft = staticDraft();
+  const savedDrafts: MapDraft[] = [];
   draft.nodes.push({ id: 's-a1c', name: 'Elevator upper', frameId: 'frame-b-a-z1', position: { kind: 'local', x: .8, y: .2 }, zoneId: 'b-a', z: 1, fingerprintRevision: 1, visitorVisible: true });
   draft.nodes.push({ id: 's-a0c', name: 'Elevator lower', frameId: 'frame-b-a-z0', position: { kind: 'local', x: .8, y: .2 }, zoneId: 'b-a', z: 0, fingerprintRevision: 1, visitorVisible: true });
   draft.nodes.push({ id: 's-a0d', name: 'West junction', frameId: 'frame-b-a-z0', position: { kind: 'local', x: .1, y: .8 }, zoneId: 'b-a', z: 0, fingerprintRevision: 1, visitorVisible: true });
@@ -18,10 +20,18 @@ async function openEditor(page: import('@playwright/test').Page) {
   draft.edges.push({ from: 's-a0c', to: 's-a1c', kind: 'elevator', cost: 4 });
   draft.transitions.push({ id: 'elevator-existing', name: 'Service elevator', kind: 'elevator', nodeIds: ['s-a0c', 's-a1c'] });
   await page.route('**/api/capabilities', (route) => route.fulfill({ json: { mapV5AuthoringEnabled: true } }));
-  await page.route('**/api/admin/venues/demo/draft-v3', (route) => route.fulfill({ json: { ...draft, venueId: 'demo' } }));
+  await page.route('**/api/admin/venues/demo/draft-v3', (route) => {
+    if (route.request().method() === 'PUT') {
+      const saved = route.request().postDataJSON() as MapDraft;
+      savedDrafts.push(saved);
+      return route.fulfill({ json: saved });
+    }
+    return route.fulfill({ json: { ...draft, venueId: 'demo' } });
+  });
   await page.route('**/api/admin/venues/demo/layout-assets/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: transparentPng }));
   await page.goto('/editor/demo');
   await expect(page.getByRole('heading', { name: 'demo' })).toBeVisible();
+  return { draft, savedDrafts };
 }
 
 async function clickNode(page: import('@playwright/test').Page, id: string) {
@@ -33,6 +43,27 @@ async function mapClick(page: import('@playwright/test').Page, x: number, y: num
   const box = await canvas.boundingBox();
   if (!box) throw new Error('Map canvas is not visible');
   await page.mouse.click(box.x + box.width * x, box.y + box.height * y);
+}
+
+async function renameNode(page: import('@playwright/test').Page, id: string, name: string) {
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await clickNode(page, id);
+  await page.getByLabel('Name').fill(name);
+  await page.getByRole('button', { name: 'Save name' }).click();
+}
+
+async function saveDraft(page: import('@playwright/test').Page, savedDrafts: MapDraft[]) {
+  const previousCount = savedDrafts.length;
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => savedDrafts.length).toBe(previousCount + 1);
+  return savedDrafts.at(-1)!;
+}
+
+function expectOnlyNodeRename(before: MapDraft, after: MapDraft, id: string, name: string) {
+  expect(after.nodes).toEqual(before.nodes.map((node) => node.id === id ? { ...node, name } : node));
+  expect(after.edges).toEqual(before.edges);
+  expect(after.transitions).toEqual(before.transitions);
+  expect(after.paths).toEqual(before.paths);
 }
 
 test('unified regular paths snap to existing nodes, finish once, and expose no Connect tool', async ({ page }) => {
@@ -74,7 +105,10 @@ test('existing elevator can be selected, edited, and deleted while stairs stay a
 });
 
 test('pending Escape and Ctrl+Z preserve document history boundaries', async ({ page }) => {
-  await openEditor(page);
+  const { savedDrafts } = await openEditor(page);
+  await renameNode(page, 's-a0b', 'Baseline corridor');
+  const baseline = await saveDraft(page, savedDrafts);
+
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Entrance' }).click();
   await clickNode(page, 's-a0b');
@@ -82,6 +116,9 @@ test('pending Escape and Ctrl+Z preserve document history boundaries', async ({ 
   await expect(page.getByRole('button', { name: 'Finish Entrance' })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(page.locator('.v5-status')).toHaveText('Pending input discarded.');
+  await renameNode(page, 's-a0b', 'After entrance cancel');
+  const afterEntranceCancel = await saveDraft(page, savedDrafts);
+  expectOnlyNodeRename(baseline, afterEntranceCancel, 's-a0b', 'After entrance cancel');
 
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Stair' }).click();
@@ -89,11 +126,14 @@ test('pending Escape and Ctrl+Z preserve document history boundaries', async ({ 
   await expect(page.getByRole('button', { name: 'Finish Stair' })).toBeDisabled();
   await page.keyboard.press('Escape');
   await expect(page.locator('.v5-status')).toHaveText('Pending input discarded.');
+  await renameNode(page, 's-a0b', 'After stair cancel');
+  const afterStairCancel = await saveDraft(page, savedDrafts);
+  expectOnlyNodeRename(afterEntranceCancel, afterStairCancel, 's-a0b', 'After stair cancel');
 
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Regular' }).click();
   await page.getByRole('button', { name: 'Select', exact: true }).click();
-  await page.getByRole('button', { name: /Ground corridor Node/ }).click();
+  await page.getByRole('button', { name: /After stair cancel Node/ }).click();
   await page.getByLabel('Name').fill('Edited corridor');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect(page.getByLabel('Name')).toHaveValue('Edited corridor');
@@ -105,12 +145,12 @@ test('pending Escape and Ctrl+Z preserve document history boundaries', async ({ 
   await expect(page.getByText('0 points', { exact: true })).toBeVisible();
   await page.keyboard.press('Control+z');
   await page.getByRole('button', { name: 'Select', exact: true }).click();
-  await page.getByRole('button', { name: /Ground corridor Node/ }).click();
-  await expect(page.getByLabel('Name')).toHaveValue('Ground corridor');
+  await page.getByRole('button', { name: /After stair cancel Node/ }).click();
+  await expect(page.getByLabel('Name')).toHaveValue('After stair cancel');
 });
 
 test('entrance and cross-floor stair pairs finish atomically; stair path associates with the new pair', async ({ page }) => {
-  await openEditor(page);
+  const { draft: originalDraft, savedDrafts } = await openEditor(page);
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Entrance' }).click();
   await mapClick(page, .43, .48);
@@ -139,6 +179,15 @@ test('entrance and cross-floor stair pairs finish atomically; stair path associa
   await newStairRow.getByRole('button', { name: 'Add path' }).click();
   await page.getByRole('tab', { name: 'Paths' }).click();
   await expect(page.getByRole('button', { name: /New stairs Stair path/ })).toBeVisible();
+
+  const saved = await saveDraft(page, savedDrafts);
+  const stairTransition = saved.transitions.find((transition) => transition.kind === 'stair' && transition.name === 'New stairs');
+  expect(stairTransition).toBeDefined();
+  expect(stairTransition!.nodeIds).toEqual(['s-stair-low', 's-stair-high']);
+  const stairPath = saved.paths?.find((path) => path.transitionId === stairTransition!.id);
+  expect(stairPath).toMatchObject({ kind: 'stair', transitionId: stairTransition!.id, nodeIds: stairTransition!.nodeIds });
+  expect(saved.edges.some((edge) => edge.from === 's-stair-low' && edge.to === 's-stair-high' && edge.kind === 'stairs')).toBe(true);
+  expect(saved.paths?.filter((path) => path.kind === 'regular')).toEqual(originalDraft.paths?.filter((path) => path.kind === 'regular'));
 });
 
 test('V4 rollback compatibility keeps legacy edge selection and deletion available', async ({ page }) => {
