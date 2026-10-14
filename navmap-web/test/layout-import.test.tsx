@@ -163,10 +163,70 @@ describe('bounded layout source conversion', () => {
     }
   });
 
+  it('keeps the page deadline through stalled PNG encoding and ignores late canvas output', async () => {
+    const source = await readLayoutSource(fixture('two-page.pdf'), new AbortController().signal);
+    let completeEncoding: BlobCallback | undefined;
+    let encodeCanvas: HTMLCanvasElement | undefined;
+    const holdEncoding = (canvas: HTMLCanvasElement, callback: BlobCallback) => {
+      encodeCanvas = canvas;
+      completeEncoding = callback;
+    };
+    vi.mocked(HTMLCanvasElement.prototype.toBlob).mockImplementation(function (callback) {
+      holdEncoding(this, callback);
+    });
+    const nativeTimeout = globalThis.setTimeout.bind(globalThis);
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: TimerHandler, delay?: number, ...args: unknown[]) =>
+      nativeTimeout(callback, delay === 30_000 ? 1_000 : delay, ...args)) as typeof setTimeout);
+    let settled: 'pending' | 'resolved' | 'rejected' = 'pending';
+    const conversion = source.renderPage(1).then(
+      () => { settled = 'resolved'; },
+      () => { settled = 'rejected'; },
+    );
+    try {
+      await waitFor(() => expect(completeEncoding).toBeDefined());
+      await new Promise((resolve) => nativeTimeout(resolve, 1_200));
+      expect(settled).toBe('rejected');
+      expect(encodeCanvas?.width).toBe(0);
+      expect(encodeCanvas?.height).toBe(0);
+      completeEncoding?.(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }));
+      await conversion;
+      expect(settled).toBe('rejected');
+    } finally {
+      await source.close();
+    }
+  });
+
+  it('aborts a stalled PNG encode, destroys its canvas, and ignores a late callback', async () => {
+    const controller = new AbortController();
+    const source = await readLayoutSource(fixture('two-page.pdf'), controller.signal);
+    let completeEncoding: BlobCallback | undefined;
+    let encodeCanvas: HTMLCanvasElement | undefined;
+    const holdEncoding = (canvas: HTMLCanvasElement, callback: BlobCallback) => {
+      encodeCanvas = canvas;
+      completeEncoding = callback;
+    };
+    vi.mocked(HTMLCanvasElement.prototype.toBlob).mockImplementation(function (callback) {
+      holdEncoding(this, callback);
+    });
+    const conversion = source.renderPage(1);
+    try {
+      await waitFor(() => expect(completeEncoding).toBeDefined());
+      controller.abort();
+      await expect(conversion).rejects.toThrow(/cancel/i);
+      expect(encodeCanvas?.width).toBe(0);
+      expect(encodeCanvas?.height).toBe(0);
+      completeEncoding?.(new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }));
+      await source.close();
+      expect(encodeCanvas?.width).toBe(0);
+    } finally {
+      await source.close();
+    }
+  });
+
   it('previews a real PDF page, uploads its PNG derivative, and commits assignment to shared history', async () => {
     function EditorHarness() {
       const editor = useEditorDocument(staticDraft());
-      return <><LayoutImportPanel venueId="demo" draft={editor.document} commit={editor.commit} />
+      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
         <button type="button" onClick={editor.undo}>Undo assignment</button>
         <output>{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
       </>;
@@ -179,7 +239,7 @@ describe('bounded layout source conversion', () => {
     expect(await screen.findByRole('img', { name: /page 2/i })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Assign page to floor' }));
     await waitFor(() => expect(screen.getByText('a'.repeat(64))).toBeVisible());
-    expect(fetch).toHaveBeenCalledWith('/api/admin/venues/demo/layout-assets', expect.objectContaining({ method: 'POST' }));
+    expect(fetch).toHaveBeenCalledWith('/api/admin/venues/demo-v5-static/layout-assets', expect.objectContaining({ method: 'POST' }));
     await user.type(screen.getByLabelText('Point A x'), '0.1');
     await user.type(screen.getByLabelText('Point A y'), '0.2');
     await user.type(screen.getByLabelText('Point B x'), '0.2');
@@ -200,7 +260,7 @@ describe('bounded layout source conversion', () => {
     vi.stubGlobal('fetch', upload);
     function EditorHarness() {
       const editor = useEditorDocument(staticDraft());
-      return <><LayoutImportPanel venueId="demo" draft={editor.document} commit={editor.commit} />
+      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
         <output>{editor.document.frames.find((frame) => frame.id === 'frame-b-a-z0')?.background?.assetId}</output>
         <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
       </>;
@@ -224,7 +284,7 @@ describe('bounded layout source conversion', () => {
     })));
     function EditorHarness() {
       const editor = useEditorDocument(staticDraft());
-      return <><LayoutImportPanel venueId="demo" draft={editor.document} commit={editor.commit} />
+      return <><LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
         <output>{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
         <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
       </>;
@@ -237,5 +297,75 @@ describe('bounded layout source conversion', () => {
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(screen.getByText('empty')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+  });
+
+  it('does not assign a late upload into another map after the editor resets', async () => {
+    let resolveUpload!: (response: Response) => void;
+    const deferredUpload = new Promise<Response>((resolve) => { resolveUpload = resolve; });
+    vi.stubGlobal('fetch', vi.fn(() => deferredUpload));
+    const mapA = { ...staticDraft(), venueId: 'map-a' };
+    const mapB = { ...staticDraft(), venueId: 'map-b' };
+    function EditorHarness() {
+      const editor = useEditorDocument(mapA);
+      return <>
+        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+        <button type="button" onClick={() => editor.reset(mapB)}>Switch map</button>
+        <output>{editor.document.venueId}:{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
+        <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
+      </>;
+    }
+    const user = userEvent.setup();
+    render(<EditorHarness />);
+    await user.upload(screen.getByLabelText('Choose a PNG or PDF'), fixture('two-page.pdf'));
+    await screen.findByRole('img', { name: /page 1/i });
+    await user.click(screen.getByRole('button', { name: 'Assign page to floor' }));
+    await screen.findByText('Preparing floor plan…');
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await user.click(screen.getByRole('button', { name: 'Switch map' }));
+    resolveUpload({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ assetId: 'a'.repeat(64), width: 600, height: 800,
+        sha256: 'b'.repeat(64), byteLength: 42 }),
+    } as Response);
+    await waitFor(() => expect(screen.queryByText('Preparing floor plan…')).not.toBeInTheDocument());
+    expect(screen.getByText('map-b:empty')).toBeVisible();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+  });
+
+  it('rejects an upload when the same map snapshot changed while transport was pending', async () => {
+    let resolveUpload!: (response: Response) => void;
+    const deferredUpload = new Promise<Response>((resolve) => { resolveUpload = resolve; });
+    vi.stubGlobal('fetch', vi.fn(() => deferredUpload));
+    const initial = staticDraft();
+    const edited = { ...initial, nodes: initial.nodes.map((node, index) => index === 0 ? { ...node, name: 'Edited during upload' } : node) };
+    function EditorHarness() {
+      const editor = useEditorDocument(initial);
+      return <>
+        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} commit={editor.commit} />
+        <button type="button" onClick={() => editor.reset(edited)}>Reload current map</button>
+        <output>{editor.document.nodes[0]?.name}:{editor.document.frames.find((frame) => frame.id === 'frame-outdoor-z0')?.background?.assetId ?? 'empty'}</output>
+        <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo</button>
+      </>;
+    }
+    const user = userEvent.setup();
+    render(<EditorHarness />);
+    await user.upload(screen.getByLabelText('Choose a PNG or PDF'), fixture('two-page.pdf'));
+    await screen.findByRole('img', { name: /page 1/i });
+    await user.click(screen.getByRole('button', { name: 'Assign page to floor' }));
+    await screen.findByText('Preparing floor plan…');
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await user.click(screen.getByRole('button', { name: 'Reload current map' }));
+    resolveUpload({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ assetId: 'a'.repeat(64), width: 600, height: 800,
+        sha256: 'b'.repeat(64), byteLength: 42 }),
+    } as Response);
+    await waitFor(() => expect(screen.queryByText('Preparing floor plan…')).not.toBeInTheDocument());
+    expect(screen.getByText('Edited during upload:empty')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/draft changed during upload/i);
   });
 });

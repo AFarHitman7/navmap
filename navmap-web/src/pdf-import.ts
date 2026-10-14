@@ -17,8 +17,29 @@ export interface LayoutSource {
 }
 
 /** Run one render under a bounded budget and invoke destructive cleanup on expiry. */
-export function withPageTimeout<T>(operation: Promise<T>, timeoutMs: number, onTimeout: () => void): Promise<T> {
+export function withPageTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => void,
+  signal?: AbortSignal,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener = () => {};
+  const cancellation = signal ? new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      try {
+        onTimeout();
+      } catch {
+        // Continue rejecting promptly even if cleanup throws.
+      }
+      reject(aborted(signal)!);
+    };
+    if (signal.aborted) onAbort();
+    else {
+      signal.addEventListener('abort', onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+    }
+  }) : new Promise<never>(() => {});
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       try {
@@ -29,8 +50,9 @@ export function withPageTimeout<T>(operation: Promise<T>, timeoutMs: number, onT
       reject(new Error('PDF page conversion exceeded the 30-second limit'));
     }, timeoutMs);
   });
-  return Promise.race([operation, timeout]).finally(() => {
+  return Promise.race([operation, timeout, cancellation]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
+    removeAbortListener();
   });
 }
 
@@ -160,26 +182,29 @@ export async function readLayoutSource(file: File, signal: AbortSignal): Promise
       rendering = true;
       let canvas: HTMLCanvasElement | undefined;
       try {
-        const page: PDFPageProxy = await pdf.getPage(pageNumber);
-        const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(1, LAYOUT_MAX_DIMENSION / base.width, LAYOUT_MAX_DIMENSION / base.height,
-          Math.sqrt(LAYOUT_MAX_PIXELS / (base.width * base.height)));
-        const viewport = page.getViewport({ scale });
-        const width = Math.max(1, Math.floor(viewport.width));
-        const height = Math.max(1, Math.floor(viewport.height));
-        checkDimensions(width, height);
-        canvas = newCanvas(width, height);
-        canvases.add(canvas);
-        const context = canvas.getContext('2d', { alpha: false });
-        if (!context) throw new Error('PDF conversion is not supported in this browser');
-        const render = page.render({ canvas, canvasContext: context, viewport });
-        activeRender = render;
-        await withPageTimeout(render.promise, PDF_PAGE_TIMEOUT_MS, () => {
-          render.cancel();
-          void destroy();
-        });
-        if (signal.aborted) throw aborted(signal)!;
-        return await canvasPng(canvas);
+        const conversion = (async () => {
+          const page: PDFPageProxy = await pdf.getPage(pageNumber);
+          if (closed || signal.aborted) throw aborted(signal) ?? new DOMException('Layout import closed', 'AbortError');
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.min(1, LAYOUT_MAX_DIMENSION / base.width, LAYOUT_MAX_DIMENSION / base.height,
+            Math.sqrt(LAYOUT_MAX_PIXELS / (base.width * base.height)));
+          const viewport = page.getViewport({ scale });
+          const width = Math.max(1, Math.floor(viewport.width));
+          const height = Math.max(1, Math.floor(viewport.height));
+          checkDimensions(width, height);
+          canvas = newCanvas(width, height);
+          canvases.add(canvas);
+          const context = canvas.getContext('2d', { alpha: false });
+          if (!context) throw new Error('PDF conversion is not supported in this browser');
+          const render = page.render({ canvas, canvasContext: context, viewport });
+          activeRender = render;
+          await render.promise;
+          if (closed || signal.aborted) throw aborted(signal) ?? new DOMException('Layout import closed', 'AbortError');
+          const png = await canvasPng(canvas);
+          if (closed || signal.aborted) throw aborted(signal) ?? new DOMException('Layout import closed', 'AbortError');
+          return png;
+        })();
+        return await withPageTimeout(conversion, PDF_PAGE_TIMEOUT_MS, () => { void destroy(); }, signal);
       } catch (error) {
         if (signal.aborted) throw aborted(signal)!;
         if (error instanceof Error && /30-second/.test(error.message)) throw error;

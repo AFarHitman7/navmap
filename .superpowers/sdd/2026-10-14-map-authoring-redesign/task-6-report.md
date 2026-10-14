@@ -61,3 +61,19 @@ No UIZZE reference MCP result/service was connected; no external visual research
 ## Remaining concern
 
 Task 7 must import/use `LayoutImportPanel` in the V5 static editor. At that point, confirm the generated local worker asset is present in that application's final bundle and inspect the panel at desktop/mobile viewports. The existing 639 kB main-entry warning and dev-only transitive audit advisory are recorded above.
+
+## Round 1 review fixes
+
+Read `.superpowers/sdd/2026-10-14-map-authoring-redesign/artifacts/task-6-review.md` and reproduced both Important findings before changing production code.
+
+1. **Stale upload/map switch:** the RED deferred-upload regression resolved a real two-page PDF, held the upload response, reset the shared editor to `map-b` with the same `frame-outdoor-z0` ID, then completed transport. Before the fix, the hook assigned the asset into `map-b` (`map-b:<assetId>`). `LayoutImportPanel` now keys its session by `{venueId,draft.venueId}`, so map switches unmount/abort and clear preview, source, selected frame, calibration, and confirmation state. The assignment's functional history updater additionally requires the current document object to be exactly the captured source snapshot and both document/venue IDs to match. A second regression resets to a changed snapshot of the same venue while upload is pending; it verifies the upload cannot commit and history stays unchanged.
+2. **Full-page conversion budget:** RED used a real parsed/rendered PDF and stalled the actual canvas `toBlob` callback. With the old implementation the observed state remained `pending` after the budget expired because the timer had already been cleared after `render.promise`. The budget now wraps PDF page retrieval, render, and PNG encoding, races the abort signal, and on timeout/abort destroys the task/worker and zeros the canvas. A closed-state check after encoding prevents late callbacks from returning a derivative. Actual stalled-encode tests verify timeout and abort rejection, canvas dimensions become zero, and a late PNG callback cannot turn the operation into success.
+
+TDD evidence:
+
+- RED: `npm test -- --run test/layout-import.test.tsx -t 'late upload into another map'` — failed with the expected stale frame assignment on `map-b`.
+- RED: `npm test -- --run test/layout-import.test.tsx -t 'stalled PNG encoding'` — failed with `expected 'pending' to be 'rejected'` after the actual encode was stalled beyond the simulated 30-second budget.
+- GREEN focused: `npm test -- --run test/layout-import.test.tsx test/layout-calibration.test.ts` — **23 tests passed**.
+- Final full verification: `npm test` — **22 files, 218 tests passed**; `npm run typecheck`, `npm run lint`, `npm run build`, and `git diff --check` passed. Build retains the already-recorded 639.03 kB main-entry warning.
+
+Round 1 changed only `navmap-web/src/LayoutImportPanel.tsx`, `navmap-web/src/pdf-import.ts`, and `navmap-web/test/layout-import.test.tsx` in addition to this report. No hook/history code was duplicated or modified; `useEditorDocument` remains the transaction owner. The V4 editor remains unwired.

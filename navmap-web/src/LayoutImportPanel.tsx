@@ -12,6 +12,11 @@ export interface LayoutImportPanelProps {
   commit: Commit;
 }
 
+export function LayoutImportPanel(props: LayoutImportPanelProps) {
+  const identity = JSON.stringify([props.venueId, props.draft.venueId]);
+  return <LayoutImportPanelSession key={identity} {...props} />;
+}
+
 function frameLabel(frame: MapFrame, draft: MapDraft): string {
   const zone = frame.zoneId ? draft.indoorZones.find((item) => item.id === frame.zoneId) : undefined;
   const floor = zone?.floors.find((item) => item.z === frame.z)?.label;
@@ -19,7 +24,7 @@ function frameLabel(frame: MapFrame, draft: MapDraft): string {
   return `${zone?.name ?? 'Outdoor'} · ${floor ?? fallback}`;
 }
 
-export function LayoutImportPanel({ venueId, draft, commit }: LayoutImportPanelProps) {
+function LayoutImportPanelSession({ venueId, draft, commit }: LayoutImportPanelProps) {
   const [source, setSource] = useState<LayoutSource | null>(null);
   const [sourceName, setSourceName] = useState('');
   const [page, setPage] = useState(1);
@@ -102,6 +107,7 @@ export function LayoutImportPanel({ venueId, draft, commit }: LayoutImportPanelP
   async function assignSelectedPage() {
     const target = draft.frames.find((frame) => frame.id === frameId);
     if (!target || !source || !preview || busy) return;
+    const sourceDraft = draft;
     if (target.background && !replacePending) {
       setReplacePending(true);
       return;
@@ -117,8 +123,13 @@ export function LayoutImportPanel({ venueId, draft, commit }: LayoutImportPanelP
       const asset = await uploadLayout(venueId, preview, controller.signal);
       if (controller.signal.aborted) return;
       const committed = commit(target.background ? 'Replace floor background' : 'Assign floor background',
-        (previous) => assignBackground(previous, target.id, asset));
-      if (!committed) setError('The background was uploaded, but could not be assigned. Your map was not changed.');
+        (current) => {
+          if (controller.signal.aborted || current !== sourceDraft || current.venueId !== venueId || sourceDraft.venueId !== venueId) {
+            throw new Error('The active map or draft changed during the upload');
+          }
+          return assignBackground(current, target.id, asset);
+        });
+      if (!committed) setError('The active map or draft changed during upload. The image was uploaded but not assigned; review the map and retry.');
       else setPreviewFrameId(target.id);
     } catch (cause) {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Could not assign this layout');
