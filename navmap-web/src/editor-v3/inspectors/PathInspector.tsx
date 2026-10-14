@@ -1,15 +1,21 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { addStairPath } from '../objects';
 import { removePathV5, renamePathV5 } from '../model';
 import type { InspectorProps } from './shared';
 import { ErrorMessage } from './shared';
 
 export function PathInspector(props: InspectorProps) {
+  const selectedId = props.selection.kind === 'path' ? props.selection.id : undefined;
+  const selected = selectedId ? (props.document.paths ?? []).find((item) => item.id === selectedId) : undefined;
+  const subtype = props.tool.kind === 'path' ? props.tool.subtype : '';
+  return <PathInspectorForm key={`${selected?.id ?? ''}:${selected?.name ?? ''}:${subtype}`} {...props} />;
+}
+
+function PathInspectorForm(props: InspectorProps) {
   const { document, selection, tool, commit, busy, gesture, onGestureChange, onFinishGesture, onCancelGesture } = props;
   const selected = selection.kind === 'path' ? (document.paths ?? []).find((item) => item.id === selection.id) : undefined;
   const [name, setName] = useState(selected?.name ?? '');
   const [error, setError] = useState('');
-  useEffect(() => setName(selected?.name ?? ''), [selected?.id, selected?.name]);
   function saveName(event: FormEvent) {
     event.preventDefault();
     try { if (!selected || !commit('Rename path', (draft) => renamePathV5(draft, selected.id, name))) throw new Error('Path name was not changed.'); setError(''); }

@@ -1,10 +1,17 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import type { Rect } from '../../map-contract';
 import { addBuildingV5, addFloorV5, renameBuildingV5, renameFloorV5 } from '../model';
 import type { InspectorProps } from './shared';
 import { ErrorMessage } from './shared';
 
-export function BuildingInspector({ document, selection, commit, busy, onSelectionChange }: InspectorProps) {
+export function BuildingInspector(props: InspectorProps) {
+  const { document, selection } = props;
+  const selected = selection.kind === 'building' ? document.indoorZones.find((zone) => zone.id === selection.id) : undefined;
+  const formKey = JSON.stringify([selected?.id, selected?.name, selected?.floors, document.boundary]);
+  return <BuildingInspectorForm key={formKey} {...props} />;
+}
+
+function BuildingInspectorForm({ document, selection, commit, busy, onSelectionChange }: InspectorProps) {
   const selected = selection.kind === 'building' ? document.indoorZones.find((zone) => zone.id === selection.id) : undefined;
   const firstBounds = document.boundary ?? (document.canvas.kind === 'static'
     ? { kind: 'local' as const, left: 0.1, top: 0.1, right: 0.9, bottom: 0.9 }
@@ -16,10 +23,6 @@ export function BuildingInspector({ document, selection, commit, busy, onSelecti
   const [floorLabel, setFloorLabel] = useState('Level 1');
   const [bounds, setBounds] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(firstBounds).filter(([key]) => key !== 'kind').map(([key, value]) => [key, String(value)])));
   const [error, setError] = useState('');
-  useEffect(() => {
-    setName(selected?.name ?? '');
-    setFloorLabels(Object.fromEntries((selected?.floors ?? []).map((floor) => [floor.z, floor.label])));
-  }, [selected?.id, selected?.name, selected?.floors]);
   const fields = firstBounds.kind === 'geographic' ? ['north', 'south', 'east', 'west'] : ['left', 'top', 'right', 'bottom'];
   function saveName(event: FormEvent) {
     event.preventDefault();

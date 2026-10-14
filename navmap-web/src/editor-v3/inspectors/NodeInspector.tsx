@@ -1,14 +1,20 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { removeNodeV5, renameNodeV5, setNodeVisibilityV5 } from '../model';
 import type { InspectorProps } from './shared';
 import { ErrorMessage } from './shared';
 
 export function NodeInspector(props: InspectorProps) {
+  const selectedId = props.selection.kind === 'node' ? props.selection.id : undefined;
+  const node = selectedId ? props.document.nodes.find((item) => item.id === selectedId) : undefined;
+  const subtype = props.tool.kind === 'node' ? props.tool.subtype : '';
+  return <NodeInspectorForm key={`${node?.id ?? ''}:${node?.name ?? ''}:${subtype}`} {...props} />;
+}
+
+function NodeInspectorForm(props: InspectorProps) {
   const { document, selection, tool, commit, busy, gesture, onGestureChange, nodeName, onNodeNameChange, onFinishGesture, onCancelGesture } = props;
   const node = selection.kind === 'node' ? document.nodes.find((item) => item.id === selection.id) : undefined;
   const [name, setName] = useState(node?.name ?? '');
   const [error, setError] = useState('');
-  useEffect(() => setName(node?.name ?? ''), [node?.id, node?.name]);
   function saveName(event: FormEvent) {
     event.preventDefault();
     try { if (!node || !commit('Rename node', (draft) => renameNodeV5(draft, node.id, name))) throw new Error('Node name was not changed.'); setError(''); }

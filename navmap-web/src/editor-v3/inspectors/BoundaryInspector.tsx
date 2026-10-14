@@ -1,16 +1,20 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import type { Rect } from '../../map-contract';
 import { setBoundaryV5 } from '../model';
 import type { InspectorProps } from './shared';
 import { ErrorMessage } from './shared';
 
-export function BoundaryInspector({ document, commit, busy, activeFrameId }: InspectorProps) {
-  const boundary = document.boundary ?? (document.canvas.kind === 'static'
+export function BoundaryInspector(props: InspectorProps) {
+  const boundary = props.document.boundary ?? (props.document.canvas.kind === 'static'
     ? { kind: 'local' as const, left: 0, top: 0, right: 1, bottom: 1 }
     : { kind: 'geographic' as const, north: 0, south: 0, east: 0, west: 0 });
   const fields = boundary.kind === 'geographic' ? ['north', 'south', 'east', 'west'] : ['left', 'top', 'right', 'bottom'];
+  const key = `${boundary.kind}:${fields.map((field) => (boundary as unknown as Record<string, unknown>)[field]).join(':')}`;
+  return <BoundaryForm key={key} {...props} boundary={boundary} fields={fields} />;
+}
+
+function BoundaryForm({ document, commit, busy, activeFrameId, boundary, fields }: InspectorProps & { boundary: Rect; fields: string[] }) {
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(boundary).filter(([key]) => key !== 'kind').map(([key, value]) => [key, String(value)])));
-  useEffect(() => setValues(Object.fromEntries(Object.entries(boundary).filter(([key]) => key !== 'kind').map(([key, value]) => [key, String(value)]))), [boundary.kind, ...fields.map((field) => (boundary as unknown as Record<string, unknown>)[field])]);
   const [error, setError] = useState('');
   function save(event: FormEvent) {
     event.preventDefault();

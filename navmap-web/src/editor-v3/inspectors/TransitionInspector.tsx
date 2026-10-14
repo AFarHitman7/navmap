@@ -1,14 +1,19 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { removeTransition } from '../objects';
 import { renameTransitionV5 } from '../model';
 import type { InspectorProps } from './shared';
 import { ErrorMessage } from './shared';
 
-export function TransitionInspector({ document, selection, commit, busy, onSelectionChange }: InspectorProps) {
+export function TransitionInspector(props: InspectorProps) {
+  const selectedId = props.selection.kind === 'transition' ? props.selection.id : undefined;
+  const transition = selectedId ? props.document.transitions.find((item) => item.id === selectedId) : undefined;
+  return <TransitionInspectorForm key={`${transition?.id ?? ''}:${transition?.name ?? ''}`} {...props} />;
+}
+
+function TransitionInspectorForm({ document, selection, commit, busy, onSelectionChange }: InspectorProps) {
   const transition = selection.kind === 'transition' ? document.transitions.find((item) => item.id === selection.id) : undefined;
   const [name, setName] = useState(transition?.name ?? '');
   const [error, setError] = useState('');
-  useEffect(() => setName(transition?.name ?? ''), [transition?.id, transition?.name]);
   function save(event: FormEvent) {
     event.preventDefault();
     try { if (!transition || !commit('Rename transition', (draft) => renameTransitionV5(draft, transition.id, name))) throw new Error('Transition name was not changed.'); setError(''); }

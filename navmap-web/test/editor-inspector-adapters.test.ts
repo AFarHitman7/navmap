@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { geographicDraft, staticDraft } from '../src/fixtures/map-v5';
+import { geographicDraft } from '../src/fixtures/map-v5';
 import { addBuildingV5, addFloorV5, removeFloorV5, removeNodeV5, setBoundaryV5 } from '../src/editor-v3/model';
 import { emptyMapDraft } from '../src/map-geometry';
 
