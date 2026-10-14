@@ -2,6 +2,7 @@ import * as Keychain from 'react-native-keychain';
 import RNFS from 'react-native-fs';
 import type { TokenStore } from './api';
 import type { PackAdapter } from './pack';
+import { decodeBase64, encodeBase64 } from './pack';
 
 /** OS secure storage for the admin session token (survey only). */
 export function keychainTokenStore(service = 'navmap-admin'): TokenStore {
@@ -33,12 +34,32 @@ export function fsPackAdapter(baseDir = `${RNFS.DocumentDirectoryPath}`): PackAd
   };
   return {
     getJson: async (url: string) => (await fetch(url)).json(),
+    getBytes: async (url: string) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Layout download failed (${response.status})`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
     rename: async (from: string, to: string) => RNFS.moveFile(abs(from), abs(to)),
     writeFile: async (path: string, data: string) => {
       await ensureParent(path);
       return RNFS.writeFile(abs(path), data, 'utf8');
     },
     readFile: async (path: string) => RNFS.readFile(abs(path), 'utf8'),
+    writeBytes: async (path: string, bytes: Uint8Array) => {
+      await ensureParent(path);
+      return RNFS.writeFile(abs(path), encodeBase64(bytes), 'base64');
+    },
+    readBytes: async (path: string) => {
+      const encoded = await RNFS.readFile(abs(path), 'base64');
+      return decodeBase64(encoded);
+    },
+    hashBytes: async (bytes: Uint8Array) => {
+      const temp = `packs/.verify-${Date.now()}-${Math.random().toString(16).slice(2)}.bin`;
+      await ensureParent(temp);
+      await RNFS.writeFile(abs(temp), encodeBase64(bytes), 'base64');
+      try { return await RNFS.hash(abs(temp), 'sha256'); }
+      finally { await RNFS.unlink(abs(temp)).catch(() => undefined); }
+    },
     rmrf: async (path: string) => RNFS.unlink(abs(path)).catch(() => undefined),
   };
 }

@@ -5,6 +5,7 @@ export const LEAFLET_CSS = "/* required styles */\r\n\r\n.leaflet-pane,\r\n.leaf
 export type LeafletMapInput = {
   path: string[];
   onlineTiles?: boolean;
+  staticFrame?: { width: number; height: number; imageDataUri: string; nodes: { id: string; name: string; x: number; y: number }[] };
   v3: {
     boundary: { north: number; south: number; east: number; west: number } | null;
     zones: { id: string; name: string; bounds: { north: number; south: number; east: number; west: number } }[];
@@ -16,12 +17,16 @@ export type LeafletMapInput = {
 
 export function buildLeafletHtml(input: LeafletMapInput): string {
   const data = JSON.stringify({ ...input, tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' }).replace(/</g, '\\u003c');
+  const staticBranch = input.staticFrame ? [
+    "if(d.staticFrame){var s=d.staticFrame,sm=L.map('map',{crs:L.CRS.Simple,minZoom:-4,maxZoom:8,zoomSnap:.25,attributionControl:false});var sb=[[0,0],[s.height,s.width]];L.imageOverlay(s.imageDataUri,sb).addTo(sm);sm.fitBounds(sb);var byId={};for(i=0;i<s.nodes.length;i++){var sn=s.nodes[i],sp=[s.height*(1-sn.y),s.width*sn.x];byId[sn.id]=[sp,sn];}for(i=1;i<d.path.length;i++){var a=byId[d.path[i-1]],c=byId[d.path[i]];if(a&&c)L.polyline([a[0],c[0]],{color:'#16776c',weight:4}).addTo(sm);}for(i=0;i<s.nodes.length;i++){var n=s.nodes[i],pt=[s.height*(1-n.y),s.width*n.x],marker=L.circleMarker(pt,{radius:6,color:'#176f68',fillColor:'#fff',fillOpacity:1}).addTo(sm),label=document.createElement('span');label.textContent=n.name||'Map point';marker.bindTooltip(label);}return;}"
+  ].join('') : '';
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>${LEAFLET_CSS} html,body,#map{height:100%;margin:0}</style></head>
 <body><div id="map"></div><script>${LEAFLET_JS}</script>
 <script>window.__NAVMAP__=${data};
 (function(){var d=window.__NAVMAP__;var i,v=d.v3,b=v.boundary;
+  ${staticBranch}
   var center=b?[(b.north+b.south)/2,(b.east+b.west)/2]:[0,0];
   var map=L.map('map');
   if(d.onlineTiles&&d.tileUrl){L.tileLayer(d.tileUrl,{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);}

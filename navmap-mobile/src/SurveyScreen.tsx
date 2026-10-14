@@ -6,6 +6,9 @@ import { apiBase } from './pack';
 import type { DraftV3, ManifestV3 } from './contract-v3';
 import type { MapDraft, MapManifest, MapNode } from './map-contract';
 import { pathPointLabels, orderSurveyNodes } from './path-survey';
+import type { PackAdapter } from './pack';
+import { encodeBase64, readFrameBackground } from './pack';
+import { MapView } from './map/MapView';
 
 /** Upload node samples; defaults to POST /api/admin/venues/:venueId/node-samples. */
 export type PostNodeSamples = (
@@ -27,6 +30,7 @@ export type SurveyScreenProps = {
   /** v3 map to survey any node in (place flow is used when absent). V4 or V5. */
   draft: DraftV3 | ManifestV3 | MapDraft | MapManifest;
   postNodeSamples?: PostNodeSamples;
+  packAdapter?: PackAdapter;
 };
 
 export const MIN_SCANS = 3;
@@ -73,6 +77,21 @@ function NodeSurveyScreen(
         ),
   );
   const node = nodeId ? draft.nodes.find((n) => n.id === nodeId) ?? null : null;
+  const staticMap = (draft as MapDraft).schemaVersion === 5 && (draft as MapDraft).canvas.kind === 'static' ? draft as MapDraft | MapManifest : null;
+  const activeFrame = staticMap?.frames.find((frame) => frame.zoneId === (zoneId === OUTDOORS ? null : zoneId) && frame.z === floorZ) ?? null;
+  const [backgroundData, setBackgroundData] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    setBackgroundData(null);
+    if (!staticMap || !activeFrame?.background || !props.packAdapter || !('version' in staticMap)) return () => { live = false; };
+    void readFrameBackground(staticMap as MapManifest, activeFrame.id, props.packAdapter).then((bytes) => {
+      if (live) setBackgroundData(`data:image/png;base64,${encodeBase64(bytes)}`);
+    }).catch(() => { if (live) setBackgroundData(null); });
+    return () => { live = false; };
+  }, [staticMap, activeFrame?.id, props.packAdapter]);
+  const surveyFrameNodes = activeFrame && staticMap
+    ? staticMap.nodes.filter((item) => item.frameId === activeFrame.id).map((item) => ({ id: item.id, name: item.name, x: item.position.kind === 'local' ? item.position.x : 0, y: item.position.kind === 'local' ? item.position.y : 0 }))
+    : [];
   const accepted: SurveyScan[] = node
     ? collectDistinctScans(props.events, allowlist, node.id)
     : [];
@@ -178,6 +197,12 @@ function NodeSurveyScreen(
           ))}
         </View>
       ) : null}
+      {staticMap && activeFrame?.background ? backgroundData ? (
+        <View testID="survey-static-map">
+          <Text>Survey reference points · {activeFrame.zoneId ? `Floor ${activeFrame.z}` : 'Outdoors'}</Text>
+          <MapView path={[]} staticFrame={{ width: activeFrame.background.width, height: activeFrame.background.height, imageDataUri: backgroundData, nodes: surveyFrameNodes }} v3={{ boundary: null, zones: [], nodes: [], activeZoneId: null, floorFilter: null }} />
+        </View>
+      ) : <Text testID="survey-static-map-status">{activeFrame.background ? 'Loading offline floor plan…' : 'No floor plan assigned'}</Text> : null}
       <Text testID="v3-survey-status" accessibilityRole="text">
         {accepted.length}/{MIN_SCANS} fresh scans (need {MIN_APS_PER_SCAN}+ registered APs each)
       </Text>

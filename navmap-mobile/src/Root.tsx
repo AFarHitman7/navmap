@@ -310,9 +310,11 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
             lastRequestAt={lastRequestAt} now={now} throttleMessage={throttleMessage}
             onRequestScan={onRequestScan} httpPost={httpPost} tokenStore={tokenStore}
             onSaved={() => undefined} draft={manifestV3} venueId={venueId}
+            packAdapter={adapter}
           /> : null}
           <VisitorScreen
             manifest={manifest}
+            packAdapter={adapter}
             qrNodeId={qrNodeId}
             manualNodeId={manualNodeId}
             destinationId={destinationId}
