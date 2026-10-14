@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { describe, expect, it } from 'vitest';
 import { staticDraft } from '../src/fixtures/map-v5.js';
 import { validatePublicationAssets } from '../src/publish-v3.js';
 import type { LayoutAsset } from '../src/layout-assets.js';
 import { publishV3 } from '../src/publish-v3.js';
 import { saveDraftV3Json } from '../src/draft.js';
-import { cleanupOrphanVersions } from '../src/db.js';
+import { cleanupOrphanVersions, openDb } from '../src/db.js';
 import { createDbForTest, discardDb } from './helpers.js';
 
 const assetBytes = Buffer.from('immutable png payload');
@@ -57,6 +58,109 @@ describe('validatePublicationAssets', () => {
 });
 
 describe('atomic static publication', () => {
+  it('refuses nested recovery transactions rather than deleting outside the writer lock', () => {
+    const db = createDbForTest();
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'static-recovery-nested-'));
+    const orphan = path.join(dataDir, 'versions', 'demo', '1');
+    try {
+      fs.mkdirSync(orphan, { recursive: true });
+      db.exec('BEGIN');
+      expect(() => cleanupOrphanVersions(db, dataDir)).toThrow(/outside an existing database transaction/);
+      expect(fs.existsSync(orphan)).toBe(true);
+      db.exec('ROLLBACK');
+    } finally {
+      if (db.isTransaction) db.exec('ROLLBACK');
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      discardDb(db);
+    }
+  });
+
+  it.each(['after-stage', 'after-rename'] as const)('startup recovery waits for a concurrent publisher %s checkpoint', async (pauseAt) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'static-publish-race-'));
+    const dataDir = path.join(root, 'data');
+    const dbPath = path.join(root, 'maps.sqlite');
+    fs.mkdirSync(dataDir, { recursive: true });
+    const db = openDb(dbPath);
+    try {
+      const draft = draftWithAssets();
+      draft.frames = draft.frames.map(frame => frame.background ? { ...frame, background: { ...asset } } : frame);
+      saveDraftV3Json(db, 'demo', JSON.stringify(draft));
+      db.prepare('INSERT INTO layout_assets (venue_id, asset_id, width, height, sha256, byte_length) VALUES (?, ?, ?, ?, ?, ?)')
+        .run('demo', asset.assetId, asset.width, asset.height, asset.sha256, asset.byteLength);
+      const source = path.join(dataDir, 'layout-assets', 'demo');
+      fs.mkdirSync(source, { recursive: true });
+      fs.writeFileSync(path.join(source, `${asset.assetId}.png`), assetBytes);
+    } finally {
+      discardDb(db);
+    }
+
+    const control = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const pause = new Int32Array(control);
+    const cleanup = new Worker(new URL('./static-publish-worker.ts', import.meta.url), {
+      execArgv: ['--import', 'tsx'],
+      workerData: { role: 'cleanup', dbPath, dataDir, control },
+    });
+    const messages: unknown[] = [];
+    cleanup.on('message', message => {
+      if (message === 'cleanup-finished') messages.push(message);
+    });
+    const waitFor = (worker: Worker, expected: string): Promise<void> => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`timed out waiting for ${expected}; messages=${JSON.stringify(messages)}`)), 8000);
+      const onMessage = (message: unknown) => {
+        messages.push(message);
+        if (typeof message === 'string' && message.startsWith('worker-error:')) {
+          clearTimeout(timeout);
+          worker.off('message', onMessage);
+          reject(new Error(message));
+        }
+        if (message === expected) { clearTimeout(timeout); worker.off('message', onMessage); resolve(); }
+      };
+      worker.on('message', onMessage);
+      worker.once('error', reject);
+      worker.once('exit', code => { if (code !== 0) reject(new Error(`worker exited ${code}`)); });
+    });
+    await waitFor(cleanup, 'cleanup-ready');
+    const publisher = new Worker(new URL('./static-publish-worker.ts', import.meta.url), {
+      execArgv: ['--import', 'tsx'],
+      workerData: { role: 'publisher', dbPath, dataDir, pauseAt, control },
+    });
+    try {
+      await waitFor(publisher, `paused:${pauseAt}`);
+      Atomics.store(pause, 1, 1);
+      Atomics.notify(pause, 1);
+      await waitFor(cleanup, 'cleanup-starting');
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(messages).not.toContain('cleanup-finished');
+      const candidate = path.join(dataDir, 'versions', 'demo', pauseAt === 'after-stage' ? '1.tmp-race' : '1');
+      if (pauseAt === 'after-stage') {
+        // The worker posts the actual tokenized path immediately before pause.
+        const stage = messages.find(m => typeof m === 'string' && m.startsWith('stage-path:')) as string | undefined;
+        expect(stage).toBeDefined();
+        expect(fs.existsSync(stage!.slice('stage-path:'.length))).toBe(true);
+      } else {
+        expect(fs.existsSync(candidate)).toBe(true);
+      }
+      Atomics.store(pause, 0, 1);
+      Atomics.notify(pause, 0);
+      await waitFor(publisher, 'publisher-finished');
+      await waitFor(cleanup, 'cleanup-finished');
+      const verify = openDb(dbPath);
+      try {
+        expect(verify.prepare('SELECT version FROM versions WHERE venue_id = ?').get('demo')).toMatchObject({ version: 1 });
+      } finally { discardDb(verify); }
+      expect(fs.readFileSync(path.join(dataDir, 'versions', 'demo', '1', 'assets', `${asset.assetId}.png`))).toEqual(assetBytes);
+      await Promise.all([publisher.terminate(), cleanup.terminate()]);
+    } finally {
+      Atomics.store(pause, 0, 1);
+      Atomics.store(pause, 1, 1);
+      Atomics.notify(pause, 0);
+      Atomics.notify(pause, 1);
+      await publisher.terminate();
+      await cleanup.terminate();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it('publishes version-scoped immutable files and leaves old versions untouched when draft changes', () => {
     const db = createDbForTest();
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'static-publish-'));

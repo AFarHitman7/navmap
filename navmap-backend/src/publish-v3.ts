@@ -30,13 +30,19 @@ import { layoutAssetPath, type LayoutAsset } from './layout-assets.js';
  * current-revision samples; only viable profiles (scanCount >= 3 with at
  * least 2 APs) are published. Stale-revision samples never publish.
  */
-export function publishV3(db: DatabaseSync, dataDir: string, venueId: string): ManifestV3 | MapManifest {
+export type PublishV3Hooks = {
+  /** Test synchronization seam; not supplied by production callers. */
+  afterStage?: (stagingDir: string) => void;
+  afterRename?: (versionDir: string) => void;
+};
+
+export function publishV3(db: DatabaseSync, dataDir: string, venueId: string, hooks?: PublishV3Hooks): ManifestV3 | MapManifest {
   normalizeVenueId(venueId);
   ensureVenue(db, venueId);
   const raw = loadDraftV3Json(db, venueId);
   if (!raw) throw Object.assign(new Error(`no v3 draft for venue ${venueId}`), { statusCode: 404 });
   const json = JSON.parse(raw);
-  if (draftSchemaVersion(json) === 5) return publishV5Draft(db, dataDir, venueId, json);
+  if (draftSchemaVersion(json) === 5) return publishV5Draft(db, dataDir, venueId, json, hooks);
   return publishV4Draft(db, dataDir, venueId, json);
 }
 
@@ -104,10 +110,10 @@ function publishV4Draft(db: DatabaseSync, dataDir: string, venueId: string, json
 /**
  * Explicit V5 publish (reader-first gate): requires MAP_V5_AUTHORING_ENABLED.
  * The manifest preserves canvas/frames/transitions/visitorVisible; static
- * static canvases publish only after their venue-owned canonical assets have
+ * canvases publish only after their venue-owned canonical assets have
  * been verified and copied into the immutable version directory.
  */
-function publishV5Draft(db: DatabaseSync, dataDir: string, venueId: string, json: unknown): MapManifest {
+function publishV5Draft(db: DatabaseSync, dataDir: string, venueId: string, json: unknown, hooks?: PublishV3Hooks): MapManifest {
   if (!isV5AuthoringEnabled()) {
     throw Object.assign(new Error('V5 map authoring is disabled on this server (MAP_V5_AUTHORING_ENABLED)'), { statusCode: 403 });
   }
@@ -116,20 +122,6 @@ function publishV5Draft(db: DatabaseSync, dataDir: string, venueId: string, json
   if (errors.length > 0) {
     throw Object.assign(new Error(errors.join('; ')), { statusCode: 400, errors });
   }
-  const assetRows = db.prepare(
-    'SELECT asset_id, width, height, sha256, byte_length FROM layout_assets WHERE venue_id = ?',
-  ).all(venueId) as Array<{ asset_id: string; width: number; height: number; sha256: string; byte_length: number }>;
-  const assets = new Map(assetRows.map((row) => [row.asset_id, {
-    assetId: row.asset_id, width: row.width, height: row.height, sha256: row.sha256, byteLength: row.byte_length,
-  }]));
-  const assetErrors = validatePublicationAssets(draft, (id) => assets.get(id));
-  if (assetErrors.length) throw Object.assign(new Error(assetErrors.join('; ')), { statusCode: 400, errors: assetErrors });
-  const allowlist = loadAps(db, venueId);
-  const profiles = draft.nodes.flatMap((node) =>
-    buildNodeProfiles(loadNodeSamples(db, venueId, node.id, node.fingerprintRevision), allowlist)
-      .filter((p) => p.scanCount >= 3 && Object.keys(p.medianRssi).length >= 2)
-      .map((p) => ({ nodeId: p.nodeId, fingerprintRevision: p.fingerprintRevision, medianRssi: { ...p.medianRssi }, scanCount: p.scanCount })),
-  );
   // BEGIN IMMEDIATE serializes version allocation across SQLite connections
   // and processes. The filesystem stage and rename complete before row commit;
   // latest remains derived from DB rows, never from directories.
@@ -140,6 +132,22 @@ function publishV5Draft(db: DatabaseSync, dataDir: string, venueId: string, json
   let finalDirectoryCreated = false;
   const verified = new Map<string, Buffer>();
   try {
+    // Read and validate ownership metadata under the same write lock as version
+    // allocation, source verification, filesystem staging, and DB insertion.
+    const assetRows = db.prepare(
+      'SELECT asset_id, width, height, sha256, byte_length FROM layout_assets WHERE venue_id = ?',
+    ).all(venueId) as Array<{ asset_id: string; width: number; height: number; sha256: string; byte_length: number }>;
+    const assets = new Map(assetRows.map((row) => [row.asset_id, {
+      assetId: row.asset_id, width: row.width, height: row.height, sha256: row.sha256, byteLength: row.byte_length,
+    }]));
+    const assetErrors = validatePublicationAssets(draft, (id) => assets.get(id));
+    if (assetErrors.length) throw Object.assign(new Error(assetErrors.join('; ')), { statusCode: 400, errors: assetErrors });
+    const allowlist = loadAps(db, venueId);
+    const profiles = draft.nodes.flatMap((node) =>
+      buildNodeProfiles(loadNodeSamples(db, venueId, node.id, node.fingerprintRevision), allowlist)
+        .filter((p) => p.scanCount >= 3 && Object.keys(p.medianRssi).length >= 2)
+        .map((p) => ({ nodeId: p.nodeId, fingerprintRevision: p.fingerprintRevision, medianRssi: { ...p.medianRssi }, scanCount: p.scanCount })),
+    );
     version = getLatestVersion(db, venueId) + 1;
     for (const frame of draft.frames) {
       const background = frame.background;
@@ -178,10 +186,12 @@ function publishV5Draft(db: DatabaseSync, dataDir: string, venueId: string, json
       const target = path.join(stagingDir, 'assets', `${background.assetId}.png`);
       if (!fs.existsSync(target)) fs.writeFileSync(target, verified.get(background.assetId)!, { flag: 'wx' });
     }
+    hooks?.afterStage?.(stagingDir);
     fs.mkdirSync(path.dirname(finalDir), { recursive: true });
     if (fs.existsSync(finalDir)) throw new Error('version directory already exists');
     fs.renameSync(stagingDir, finalDir);
     finalDirectoryCreated = true;
+    hooks?.afterRename?.(finalDir);
     stagingDir = undefined;
     db.prepare('INSERT INTO versions (venue_id, version, manifest_json) VALUES (?, ?, ?)').run(venueId, version, JSON.stringify(manifest));
     db.exec('COMMIT');

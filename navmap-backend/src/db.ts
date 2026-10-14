@@ -161,41 +161,54 @@ export function getLatestVersion(db: DatabaseSync, venueId: string): number {
 
 /** Remove orphan version dirs: *.tmp staging dirs, and version dirs with no DB row. */
 export function cleanupOrphanVersions(db: DatabaseSync, dataDir: string): void {
-  const venueIds = db.prepare('SELECT id FROM venues').all() as Array<{ id: string }>;
-  const ids = venueIds.length ? venueIds.map((r) => r.id) : [DEMO_VENUE_ID];
-  const baseRoot = path.join(dataDir, 'versions');
-  for (const venueId of ids) {
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(venueId)) continue;
-    const base = path.join(baseRoot, venueId);
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(base);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = path.join(base, entry);
-      let stat;
+  // App startup and db:init enter this top-level helper outside a transaction.
+  // The same SQLite write lock used by publishers is required because cleanup
+  // must not classify a live stage/renamed directory as an orphan. Do not
+  // emulate nesting with a savepoint: a deferred outer transaction would not
+  // serialize the filesystem deletes against publishers.
+  if (db.isTransaction) throw new Error('version recovery must run outside an existing database transaction');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const venueIds = db.prepare('SELECT id FROM venues').all() as Array<{ id: string }>;
+    const ids = venueIds.length ? venueIds.map((r) => r.id) : [DEMO_VENUE_ID];
+    const baseRoot = path.join(dataDir, 'versions');
+    for (const venueId of ids) {
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(venueId)) continue;
+      const base = path.join(baseRoot, venueId);
+      let entries: string[];
       try {
-        stat = fs.lstatSync(full);
+        entries = fs.readdirSync(base);
       } catch {
         continue;
       }
-      if (stat.isSymbolicLink()) continue;
-      if (entry.endsWith('.tmp') || /\.tmp-/.test(entry)) {
-        // V5 staging dirs include an unpredictable attempt token, and can be
-        // removed after restart because they were never DB-visible versions.
-        if (!/^\d+\.tmp(?:-[a-f0-9-]+)?$/.test(entry)) continue;
-        fs.rmSync(full, { recursive: true, force: true });
-        continue;
-      }
-      if (/^\d+$/.test(entry)) {
-        const row = db
-          .prepare('SELECT version FROM versions WHERE venue_id = ? AND version = ?')
-          .get(venueId, Number(entry)) as { version: number } | undefined;
-        if (!row) fs.rmSync(full, { recursive: true, force: true });
+      for (const entry of entries) {
+        const full = path.join(base, entry);
+        let stat;
+        try {
+          stat = fs.lstatSync(full);
+        } catch {
+          continue;
+        }
+        if (stat.isSymbolicLink()) continue;
+        if (entry.endsWith('.tmp') || /\.tmp-/.test(entry)) {
+          // V5 staging dirs include an unpredictable attempt token, and can be
+          // removed after restart because they were never DB-visible versions.
+          if (!/^\d+\.tmp(?:-[a-f0-9-]+)?$/.test(entry)) continue;
+          fs.rmSync(full, { recursive: true, force: true });
+          continue;
+        }
+        if (/^\d+$/.test(entry)) {
+          const row = db
+            .prepare('SELECT version FROM versions WHERE venue_id = ? AND version = ?')
+            .get(venueId, Number(entry)) as { version: number } | undefined;
+          if (!row) fs.rmSync(full, { recursive: true, force: true });
+        }
       }
     }
+    db.exec('COMMIT');
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch { /* preserve the original failure */ }
+    throw err;
   }
 }
 
