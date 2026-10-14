@@ -3,16 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDb } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
-import { buildApp } from '../src/app.js';
+import { buildApp, type AppOptions } from '../src/app.js';
 
 export function createDbForTest() {
   return openDb(':memory:');
 }
 
-export function testContext() {
+export function testContext(options: Pick<AppOptions, 'layoutAssetHooks'> = {}) {
   const db = createDbForTest();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'navmap-test-'));
-  const app = buildApp(db, { adminPasswordHash: hashPassword('correct-password'), dataDir });
+  const app = buildApp(db, { adminPasswordHash: hashPassword('correct-password'), dataDir, ...options });
   return { db, app, dataDir };
 }
 

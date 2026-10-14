@@ -32,6 +32,17 @@ function uploadHeaders(cookie: string, boundary: string, extra: Record<string, s
   return { cookie, 'content-type': `multipart/form-data; boundary=${boundary}`, host: 'test.local', ...extra };
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  let settled = false;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = (value) => { settled = true; res(value); };
+    reject = (reason) => { settled = true; rej(reason); };
+  });
+  return { promise, resolve, reject, isResolved: () => settled };
+}
+
 async function uploadPng(
   app: ReturnType<typeof testContext>['app'],
   cookie: string,
@@ -112,20 +123,147 @@ describe('layout assets', () => {
     }
   });
 
-  it('aborts processing on a client disconnect after upload body completion', async () => {
-    const { db, app, dataDir } = testContext();
+  it('aborts when a live client disconnects while multipart bytes are incomplete', async () => {
+    const requestStarted = deferred<AbortSignal>();
+    const multipartFileStarted = deferred();
+    const { db, app, dataDir } = testContext({
+      layoutAssetHooks: {
+        onRequestStarted: (signal) => requestStarted.resolve(signal),
+        onMultipartFileStarted: () => multipartFileStarted.resolve(),
+      },
+    });
     try {
       const { cookie } = await login(app);
-      // High-entropy but sub-20-MiB PNG keeps native decode/re-encode busy
-      // long enough to disconnect after the complete multipart body is sent.
-      const raw = randomBytes(1600 * 1600 * 3);
-      const png = await sharp(raw, { raw: { width: 1600, height: 1600, channels: 3 } }).png().toBuffer();
-      const boundary = '----task4disconnect';
+      const boundary = '----task4earlydisconnect';
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      try {
+        const port = (app.server.address() as { port: number }).port;
+        const request = http.request({
+          method: 'POST',
+          host: '127.0.0.1',
+          port,
+          path: '/api/admin/venues/demo/layout-assets',
+          headers: {
+            cookie,
+            origin: `http://127.0.0.1:${port}`,
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            'content-length': 100_000,
+          },
+        });
+        const clientError = deferred<Error>();
+        request.on('error', clientError.resolve);
+        request.flushHeaders();
+        const signal = await requestStarted.promise;
+        request.write(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="layout.png"\r\nContent-Type: image/png\r\n\r\n`);
+        request.write(PNG_1X1.subarray(0, 12));
+        await multipartFileStarted.promise;
+        request.destroy();
+        expect((await clientError.promise as NodeJS.ErrnoException).code).toBe('ECONNRESET');
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        expect(signal.aborted).toBe(true);
+        expect((db.prepare('SELECT COUNT(*) AS count FROM layout_assets WHERE venue_id = ?').get('demo') as { count: number }).count).toBe(0);
+        expect(fs.existsSync(path.join(dataDir, 'layout-assets', 'demo'))).toBe(false);
+      } finally {
+        await app.close();
+      }
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('cancels Sharp after the complete body reaches canonicalization and commits nothing', async () => {
+    const requestStarted = deferred<AbortSignal>();
+    const bodyConsumed = deferred();
+    const canonicalizationStarted = deferred();
+    const pipelineCancelled = deferred();
+    const receivedResponse = deferred();
+    const { db, app, dataDir } = testContext({
+      layoutAssetHooks: {
+        onRequestStarted: (signal) => requestStarted.resolve(signal),
+        onBodyConsumed: () => bodyConsumed.resolve(),
+        onPipelineStarted: (stage, signal) => {
+          if (stage !== 'canonicalize') return;
+          canonicalizationStarted.resolve();
+          return new Promise<void>((resolve) => {
+            if (signal.aborted) resolve();
+            else signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        },
+        onPipelineCancelled: (stage) => {
+          if (stage === 'canonicalize') pipelineCancelled.resolve();
+        },
+      },
+    });
+    try {
+      const { cookie } = await login(app);
+      const raw = randomBytes(2200 * 2200 * 3);
+      const png = await sharp(raw, { raw: { width: 2200, height: 2200, channels: 3 } }).png().toBuffer();
+      expect(png.length).toBeLessThan(20 * 1024 * 1024);
+      const boundary = '----task4processingdisconnect';
       const body = multipartBody(boundary, [{ name: 'file', filename: 'layout.png', contentType: 'image/png', data: png }]);
       await app.listen({ port: 0, host: '127.0.0.1' });
       try {
         const port = (app.server.address() as { port: number }).port;
-        await new Promise<void>((resolve, reject) => {
+        const request = http.request({
+          method: 'POST',
+          host: '127.0.0.1',
+          port,
+          path: '/api/admin/venues/demo/layout-assets',
+          headers: {
+            cookie,
+            origin: `http://127.0.0.1:${port}`,
+            'content-type': `multipart/form-data; boundary=${boundary}`,
+            'content-length': body.length,
+          },
+        }, () => { receivedResponse.resolve(); });
+        const clientError = deferred<Error>();
+        request.on('error', clientError.resolve);
+        request.end(body);
+        const signal = await requestStarted.promise;
+        await bodyConsumed.promise;
+        await canonicalizationStarted.promise;
+        request.destroy();
+        const [, , disconnectError] = await Promise.all([
+          new Promise<void>((resolve) => {
+            if (signal.aborted) resolve();
+            else signal.addEventListener('abort', () => resolve(), { once: true });
+          }),
+          pipelineCancelled.promise,
+          clientError.promise,
+        ]);
+        expect((disconnectError as NodeJS.ErrnoException).code).toBe('ECONNRESET');
+        expect(signal.aborted).toBe(true);
+        expect(receivedResponse.isResolved()).toBe(false);
+        expect((db.prepare('SELECT COUNT(*) AS count FROM layout_assets WHERE venue_id = ?').get('demo') as { count: number }).count).toBe(0);
+        expect(fs.existsSync(path.join(dataDir, 'layout-assets', 'demo'))).toBe(false);
+      } finally {
+        await app.close();
+      }
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('does not treat normal live request-body completion as cancellation', async () => {
+    const bodyConsumed = deferred();
+    let processingSignal: AbortSignal | undefined;
+    const { db, app } = testContext({
+      layoutAssetHooks: {
+        onBodyConsumed: () => bodyConsumed.resolve(),
+        onPipelineStarted: (_stage, signal) => { processingSignal = signal; },
+      },
+    });
+    try {
+      const { cookie } = await login(app);
+      const boundary = '----task4normalclose';
+      const body = multipartBody(boundary, [{ name: 'file', filename: 'layout.png', contentType: 'image/png', data: PNG_1X1 }]);
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      try {
+        const port = (app.server.address() as { port: number }).port;
+        const response = await new Promise<{ statusCode?: number; body: string }>((resolve, reject) => {
           const request = http.request({
             method: 'POST',
             host: '127.0.0.1',
@@ -137,16 +275,21 @@ describe('layout assets', () => {
               'content-type': `multipart/form-data; boundary=${boundary}`,
               'content-length': body.length,
             },
-          }, () => reject(new Error('upload unexpectedly completed before disconnect')));
-          request.on('error', (error) => {
-            if ((error as NodeJS.ErrnoException).code === 'ECONNRESET') resolve();
-            else reject(error);
+          }, (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('end', () => resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+            res.on('error', reject);
           });
-          request.end(body, () => setTimeout(() => request.destroy(), 10));
+          request.on('error', reject);
+          request.end(body);
         });
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        expect((db.prepare('SELECT COUNT(*) AS count FROM layout_assets WHERE venue_id = ?').get('demo') as { count: number }).count).toBe(0);
-        expect(fs.existsSync(path.join(dataDir, 'layout-assets', 'demo'))).toBe(false);
+        await bodyConsumed.promise;
+        expect(response.statusCode).toBe(200);
+        expect(JSON.parse(response.body)).toMatchObject({ width: 1, height: 1 });
+        expect(processingSignal).toBeDefined();
+        expect(processingSignal?.aborted).toBe(false);
+        expect((db.prepare('SELECT COUNT(*) AS count FROM layout_assets WHERE venue_id = ?').get('demo') as { count: number }).count).toBe(1);
       } finally {
         await app.close();
       }

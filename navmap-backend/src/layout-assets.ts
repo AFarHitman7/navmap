@@ -73,6 +73,8 @@ function hasAnimationChunk(bytes: Buffer): boolean {
 export type DecodeOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
+  onPipelineStarted?: (stage: 'metadata' | 'canonicalize' | 'verify') => void | Promise<void>;
+  onPipelineCancelled?: (stage: 'metadata' | 'canonicalize' | 'verify') => void;
 };
 
 /**
@@ -103,7 +105,11 @@ export async function canonicalizeLayoutPng(
     throw httpError(400, 'animated layout images are not supported');
   }
 
-  const runBounded = async <T>(make: () => Sharp, use: (image: Sharp) => Promise<T>): Promise<T> => {
+  const runBounded = async <T>(
+    stage: 'metadata' | 'canonicalize' | 'verify',
+    make: () => Sharp,
+    use: (image: Sharp) => Promise<T>,
+  ): Promise<T> => {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) throw httpError(503, 'layout processing timed out');
     const image = make();
@@ -119,6 +125,7 @@ export async function canonicalizeLayoutPng(
       } catch {
         /* already settled */
       }
+      opts.onPipelineCancelled?.(stage);
     };
     if (opts.signal) {
       if (opts.signal.aborted) onAbort();
@@ -137,7 +144,18 @@ export async function canonicalizeLayoutPng(
       timer.unref?.();
     });
     try {
-      return await Promise.race([use(image), watchdog]);
+      const processing = use(image);
+      const observed = opts.onPipelineStarted?.(stage);
+      if (observed) {
+        // Test observers may hold the JS continuation until cancellation while
+        // native work is already in flight; preserve early pipeline failures.
+        await Promise.race([
+          observed,
+          watchdog,
+          processing.then(() => new Promise<never>(() => {}), (err) => Promise.reject(err)),
+        ]);
+      }
+      return await Promise.race([processing, watchdog]);
     } finally {
       if (timer) clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onAbort);
@@ -147,6 +165,7 @@ export async function canonicalizeLayoutPng(
   let metadata: Metadata;
   try {
     metadata = await runBounded(
+      'metadata',
       () => sharp(source, { limitInputPixels: LAYOUT_MAX_PIXELS, animated: false }),
       (image) => image.metadata(),
     );
@@ -169,6 +188,7 @@ export async function canonicalizeLayoutPng(
   let canonical: Buffer;
   try {
     canonical = await runBounded(
+      'canonicalize',
       () => sharp(source, { limitInputPixels: LAYOUT_MAX_PIXELS, animated: false }),
       (image) => image.png().toBuffer(),
     );
@@ -181,6 +201,7 @@ export async function canonicalizeLayoutPng(
   let stored: Metadata;
   try {
     stored = await runBounded(
+      'verify',
       () => sharp(canonical, { animated: false }),
       (image) => image.metadata(),
     );

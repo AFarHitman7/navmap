@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { cleanupOrphanVersions } from './db.js';
 import { LAYOUT_SOURCE_MAX_BYTES } from './layout-assets.js';
 import { registerAdminRoutes } from './routes/admin.js';
-import { registerLayoutAssetRoutes } from './routes/layout-assets.js';
+import { registerLayoutAssetRoutes, type LayoutAssetRouteHooks } from './routes/layout-assets.js';
 import { registerPublicRoutes } from './routes/public.js';
 
 export type AppOptions = {
@@ -15,6 +15,8 @@ export type AppOptions = {
   dataDir: string;
   webDistDir?: string;
   https?: { cert: Buffer; key: Buffer };
+  /** Test-only lifecycle observer seam; absent in production. */
+  layoutAssetHooks?: LayoutAssetRouteHooks;
 };
 
 export function buildApp(db: DatabaseSync, options: AppOptions): FastifyInstance {
@@ -31,7 +33,7 @@ export function buildApp(db: DatabaseSync, options: AppOptions): FastifyInstance
     adminPasswordHash: options.adminPasswordHash,
     dataDir: options.dataDir,
   });
-  registerLayoutAssetRoutes(app, db, { dataDir: options.dataDir });
+  registerLayoutAssetRoutes(app, db, { dataDir: options.dataDir, hooks: options.layoutAssetHooks });
   registerPublicRoutes(app, db, { dataDir: options.dataDir });
 
   const dist = options.webDistDir;

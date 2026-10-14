@@ -5,6 +5,17 @@ import { LAYOUT_ASSET_ID_RE, LAYOUT_SOURCE_MAX_BYTES, readLayoutAsset, storeLayo
 import { normalizeVenueId } from '../venue-id.js';
 import { ensureVenue } from '../venues.js';
 
+export type LayoutAssetProcessingStage = 'metadata' | 'canonicalize' | 'verify';
+
+/** Optional lifecycle seam for deterministic transport tests; unset in production. */
+export type LayoutAssetRouteHooks = {
+  onRequestStarted?: (signal: AbortSignal) => void;
+  onMultipartFileStarted?: () => void;
+  onBodyConsumed?: () => void;
+  onPipelineStarted?: (stage: LayoutAssetProcessingStage, signal: AbortSignal) => void | Promise<void>;
+  onPipelineCancelled?: (stage: LayoutAssetProcessingStage) => void;
+};
+
 function sendMappedError(reply: { code(n: number): unknown; send(b: unknown): unknown }, err: unknown): unknown {
   const status = (err as { statusCode?: number }).statusCode;
   const code = typeof status === 'number' && Number.isInteger(status) ? status : 400;
@@ -14,7 +25,7 @@ function sendMappedError(reply: { code(n: number): unknown; send(b: unknown): un
 export function registerLayoutAssetRoutes(
   app: FastifyInstance,
   db: DatabaseSync,
-  opts: { dataDir: string },
+  opts: { dataDir: string; hooks?: LayoutAssetRouteHooks },
 ): void {
   app.post('/api/admin/venues/:venueId/layout-assets', async (req, reply) => {
     const { venueId } = req.params as { venueId: string };
@@ -32,6 +43,7 @@ export function registerLayoutAssetRoutes(
     req.raw.on('aborted', onRequestAborted);
     reply.raw.on('close', onResponseClose);
     req.raw.socket.on('close', onSocketClose);
+    opts.hooks?.onRequestStarted?.(controller.signal);
     try {
       try {
         normalizeVenueId(venueId);
@@ -58,13 +70,19 @@ export function registerLayoutAssetRoutes(
         if (mime !== 'image/png') {
           return reply.code(400).send({ error: 'layout upload must declare image/png' });
         }
+        opts.hooks?.onMultipartFileStarted?.();
         bytes = await file.toBuffer();
       }
+      opts.hooks?.onBodyConsumed?.();
       if (!bytes) return reply.code(400).send({ error: 'a PNG file is required' });
       if (bytes.length > LAYOUT_SOURCE_MAX_BYTES) {
         return reply.code(413).send({ error: 'layout image exceeds the 20 MiB source limit' });
       }
-      const asset = await storeLayoutPng(db, opts.dataDir, venueId, bytes, { signal: controller.signal });
+      const asset = await storeLayoutPng(db, opts.dataDir, venueId, bytes, {
+        signal: controller.signal,
+        onPipelineStarted: (stage) => opts.hooks?.onPipelineStarted?.(stage, controller.signal),
+        onPipelineCancelled: opts.hooks?.onPipelineCancelled,
+      });
       return asset;
     } catch (err) {
       if (controller.signal.aborted) return;
