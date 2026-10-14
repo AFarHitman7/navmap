@@ -77,6 +77,7 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
       const selected = selection.kind === 'node' && selection.id === node.id;
       const marker = L.marker([node.position.lat, node.position.lng], {
         draggable: mode === 'move' && view === 'editor',
+        zIndexOffset: view === 'editor' && (mode === 'endpoints' || mode === 'draw-path') ? 1000 : 0,
         icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
       marker.getElement()?.setAttribute('data-node-id', node.id);
@@ -94,7 +95,7 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
       if (!local || !other || local.position.kind !== 'geographic') continue;
       const semanticLabel = transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs';
       const label = escapeHtml(view === 'visitor' ? semanticLabel : `${semanticLabel} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
-      const badge = L.marker([local.position.lat, local.position.lng], { interactive: view === 'editor', icon: L.divIcon({ className: 'v5-transition-badge', html: `<span>${label}</span>`, iconSize: [132, 24], iconAnchor: [0, 12] }) }).addTo(group);
+      const badge = L.marker([local.position.lat, local.position.lng], { interactive: view === 'editor', zIndexOffset: view === 'editor' && (mode === 'endpoints' || mode === 'draw-path') ? -1000 : 0, icon: L.divIcon({ className: 'v5-transition-badge', html: `<span>${label}</span>`, iconSize: [132, 24], iconAnchor: [0, 12] }) }).addTo(group);
       badge.getElement()?.setAttribute('data-transition', transition.id);
       if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });
     }

@@ -86,9 +86,14 @@ export function addRegularPath(draft: MapDraft, vertices: Array<Endpoint | PathV
     }
     if ('frameId' in vertex && 'position' in vertex) {
       if ('nodeId' in vertex && vertex.nodeId) return vertex;
-      work = addNodeAtV5(work, vertex.frameId, vertex.position, 'Path point');
-      const node = work.nodes.at(-1)!;
-      return { frameId: node.frameId, position: node.position, nodeId: node.id };
+      const [next, node] = endpoint(work, { frameId: vertex.frameId, position: vertex.position, name: 'Path point' });
+      work = next;
+      return {
+        frameId: node.frameId,
+        position: node.position,
+        nodeId: node.id,
+        ...('incomingKind' in vertex && vertex.incomingKind ? { incomingKind: vertex.incomingKind } : {}),
+      };
     }
     throw new Error('Path vertices must be existing nodes or positioned frame points');
   });

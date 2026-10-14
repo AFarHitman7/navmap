@@ -131,6 +131,26 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
     if (!selectionExists(selection, draft)) setSelection({ kind: 'none' });
   }, [draft, selection, setSelection]);
 
+  const pendingCount = gesture?.kind === 'path' ? gesture.vertices.length : gesture?.endpoints.length ?? 0;
+  const undoDocument = doc.undo;
+  const undoPendingOrDocument = useCallback(() => {
+    if (busy) return false;
+    if (gesture && pendingCount > 0) {
+      setGesture((current) => {
+        if (!current) return current;
+        if (current.kind === 'path') return { ...current, vertices: current.vertices.slice(0, -1) };
+        return { ...current, endpoints: current.endpoints.slice(0, -1) };
+      });
+      setStatus(gesture.kind === 'path' ? 'Last pending point undone.' : 'Last pending endpoint undone.');
+      return true;
+    }
+    if (undoDocument()) {
+      setStatus('Undone.');
+      return true;
+    }
+    return false;
+  }, [busy, gesture, pendingCount, setGesture, setStatus, undoDocument]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -145,18 +165,11 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z' || event.shiftKey) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
-      if (!gesture || busy) return;
-      event.preventDefault();
-      setGesture((current) => {
-        if (!current) return current;
-        if (current.kind === 'path') return { ...current, vertices: current.vertices.slice(0, -1) };
-        return { ...current, endpoints: current.endpoints.slice(0, -1) };
-      });
-      setStatus('Last pending point undone.');
+      if (undoPendingOrDocument()) event.preventDefault();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [gesture, busy, setGesture, setTool, setStatus]);
+  }, [gesture, setGesture, setTool, setStatus, undoPendingOrDocument]);
 
   async function save(): Promise<boolean> {
     if (!enabled || busy || gesture) return false;
@@ -203,7 +216,7 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
       : tool.kind === 'path' && tool.subtype === 'regular' ? 'draw-path' : tool.kind === 'move' ? 'move' : 'select';
   return <main className="v5-editor" aria-label="Map editor">
     <header className="v5-editor-header"><div><p className="eyebrow">MAP AUTHORING · V5</p><h1>{mapName || draft.venueId}</h1><p>{draft.canvas.kind === 'static' ? 'Static floor plan' : 'Geographic map'} · {doc.dirty ? 'Unsaved changes' : 'Saved'}</p></div>
-      <div className="workspace-actions v5-fixed-actions"><button type="button" disabled={!doc.canUndo || busy} onClick={doc.undo}>Undo</button><button type="button" disabled={!doc.canRedo || busy} onClick={doc.redo}>Redo</button><button type="button" disabled={!enabled || busy || !doc.dirty || gesture !== null} onClick={() => void save()}>Save</button></div>
+      <div className="workspace-actions v5-fixed-actions"><button type="button" disabled={(!doc.canUndo && pendingCount === 0) || busy} onClick={undoPendingOrDocument}>Undo</button><button type="button" disabled={!doc.canRedo || busy} onClick={doc.redo}>Redo</button><button type="button" disabled={!enabled || busy || !doc.dirty || gesture !== null} onClick={() => void save()}>Save</button></div>
     </header>
     <UnsavedChangesDialog open={blocker.state === 'blocked'} busy={busy} saveDisabled={gesture !== null} saveError={gesture ? 'Finish or discard pending input before saving.' : status.startsWith('Save failed') ? status : null}
       onSave={() => void saveAndContinue()} onDiscard={() => blocker.proceed?.()} onCancel={() => blocker.reset?.()} />

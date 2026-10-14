@@ -1,7 +1,20 @@
 import { useState, type FormEvent } from 'react';
 import { removeNodeV5, renameNodeV5, setNodeVisibilityV5 } from '../model';
+import type { Endpoint } from '../objects';
 import type { InspectorProps } from './shared';
 import { ErrorMessage } from './shared';
+
+function endpointLabel(endpoint: Endpoint, role: string, document: InspectorProps['document']): string {
+  const nodeId = typeof endpoint === 'string' ? endpoint : 'nodeId' in endpoint ? endpoint.nodeId : undefined;
+  const node = nodeId ? document.nodes.find((item) => item.id === nodeId) : undefined;
+  const frameId = node?.frameId ?? (typeof endpoint === 'object' && 'frameId' in endpoint ? endpoint.frameId : undefined);
+  const frame = frameId ? document.frames.find((item) => item.id === frameId) : undefined;
+  if (!frame) return `${role} · selected landing`;
+  const zone = frame.zoneId ? document.indoorZones.find((item) => item.id === frame.zoneId) : undefined;
+  const floor = zone?.floors.find((item) => item.z === frame.z)?.label ?? (zone ? `Floor ${frame.z}` : 'Ground');
+  const location = `${zone?.name ?? 'Outdoor'} · ${floor}`;
+  return `${role} · ${node ? `${node.name} · ` : ''}${location}`;
+}
 
 export function NodeInspector(props: InspectorProps) {
   const selectedId = props.selection.kind === 'node' ? props.selection.id : undefined;
@@ -38,7 +51,7 @@ function NodeInspectorForm(props: InspectorProps) {
     return <section className="v5-inspector-form" aria-labelledby="node-inspector-title">
       <p className="v5-context-kicker">Node · {subtype === 'entrance' ? 'Entrance' : 'Stair'}</p><h2 id="node-inspector-title">{subtype === 'entrance' ? 'Entrance' : 'Stair connection'}</h2>
       <label>{subtype === 'entrance' ? 'Entrance name' : 'Stair name'}<input value={current?.name ?? ''} disabled={busy} onChange={(event) => setNameValue(event.currentTarget.value)} /></label>
-      <ol className="v5-endpoint-steps">{roles.map((role, index) => <li key={role} className={count > index ? 'complete' : ''}>{role}{count > index ? ' · selected' : index === count ? ' · click an existing node or map position' : ''}</li>)}</ol>
+      <ol className="v5-endpoint-steps">{roles.map((role, index) => <li key={role} className={count > index ? 'complete' : ''}>{count > index && current ? `${endpointLabel(current.endpoints[index]!, role, document)} · selected` : `${role}${index === count ? ' · click an existing node or map position' : ''}`}</li>)}</ol>
       {subtype === 'entrance' && <p>An entrance joins an indoor ground-floor landing to an outdoor point. Existing nodes are reused.</p>}
       {subtype === 'stair' && <p>Choose two landings in one building on different floors. Existing nodes are reused; survey node IDs stay attached.</p>}
       <div className="v5-action-row"><button type="button" className="primary" disabled={busy || count !== 2} onClick={onFinishGesture}>Finish {subtype}</button>

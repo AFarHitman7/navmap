@@ -85,6 +85,25 @@ describe('logical editor objects', () => {
     expect(entrance.transitions.at(-1)?.kind).toBe('entrance');
   });
 
+  it('reuses an existing path junction for a positioned endpoint without duplicating its node ID', () => {
+    const draft = staticDraft();
+    const pathBase = { ...draft, edges: [], paths: [], transitions: [] };
+    const next = addRegularPath(pathBase, [
+      's-a0',
+      { frameId: 'frame-b-a-z0', position: { kind: 'local', x: 0.5, y: 0.7 } },
+    ], 'Existing junction');
+    expect(next.paths?.at(-1)?.nodeIds[0]).toBe('s-a0');
+    expect(next.paths?.at(-1)?.nodeIds.at(-1)).toBe('s-a0b');
+    expect(next.nodes.filter((node) => node.frameId === 'frame-b-a-z0' && node.position.kind === 'local' && node.position.x === 0.5 && node.position.y === 0.7).map((node) => node.id)).toEqual(['s-a0b']);
+  });
+
+  it('rejects duplicate positioned path endpoints without changing the source draft', () => {
+    const draft = { ...staticDraft(), edges: [], paths: [], transitions: [] };
+    const samePosition = { frameId: 'frame-b-a-z0', position: { kind: 'local' as const, x: 0.5, y: 0.7 } };
+    expect(() => addRegularPath(draft, [samePosition, samePosition], 'Duplicate')).toThrow(/duplicate|positive/i);
+    expect(draft.nodes.find((node) => node.id === 's-a0b')?.position).toEqual({ kind: 'local', x: 0.5, y: 0.7 });
+  });
+
   it('rejects stair toggles inside a regular path group', () => {
     const draft = staticDraft();
     expect(() => addRegularPath(draft, [
