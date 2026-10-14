@@ -50,9 +50,9 @@ function PathInspectorForm(props: InspectorProps) {
   if (!selected) return <section className="v5-inspector-form"><h2>Path</h2><p>Select a path on the map to edit it.</p></section>;
   return <section className="v5-inspector-form" aria-labelledby="path-inspector-title"><p className="v5-context-kicker">Selected {selected.kind} path</p><h2 id="path-inspector-title">Path properties</h2>
     <form onSubmit={saveName}><label>Path name<input required value={name} disabled={busy} onChange={(event) => setName(event.currentTarget.value)} /></label><button type="submit" disabled={busy}>Save name</button></form>
-    <p>{selected.nodeIds.length} routing points</p><button className="danger" type="button" disabled={busy} onClick={() => {
+    <button className="danger" type="button" disabled={busy} onClick={() => {
       if (!commit('Delete path', (draft) => removePathV5(draft, selected.id))) setError('Path was not deleted.'); else setError('');
     }}>Delete path</button>
-    <details><summary>Advanced</summary><p className="coordinates">ID: {selected.id}</p></details><ErrorMessage error={error} />
+    <details><summary>Advanced details</summary><p>{selected.nodeIds.length} routing points</p><p className="coordinates">ID: {selected.id}</p></details><ErrorMessage error={error} />
   </section>;
 }

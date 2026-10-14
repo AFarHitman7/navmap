@@ -28,7 +28,7 @@ describe('routed V5 authoring', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'static-room' })).toBeVisible());
     await userEvent.click(screen.getByRole('button', { name: 'Floor plans' }));
     expect(screen.getByText('Add a floor plan')).toBeVisible();
-    expect(screen.getByRole('button', { name: /Node/ })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Node', exact: true })).toBeVisible();
     expect(screen.getByRole('application', { name: 'Static floor plan' })).toBeVisible();
     expect(getDraftV5).toHaveBeenCalledWith('static-room');
   });

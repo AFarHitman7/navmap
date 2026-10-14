@@ -2,6 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { MapDraft, MapManifest, Position } from '../map-contract';
+import { projectMap } from '../editor-v3/presentation';
+import type { Selection } from '../editor-v3/tool-state';
+
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
 export type CanvasCallbacks = {
   onPointClick?: (position: Position, frameId: string) => void;
@@ -9,10 +13,11 @@ export type CanvasCallbacks = {
   onNodeClick?: (nodeId: string) => void;
   onPathClick?: (pathId: string) => void;
   onTransitionClick?: (transitionId: string) => void;
+  onEdgeClick?: (from: string, to: string) => void;
 };
-export type CanvasProps = { document: MapDraft | MapManifest; activeFrameId: string; mode: string; callbacks: CanvasCallbacks; view?: 'editor' | 'visitor' | 'survey' };
+export type CanvasProps = { document: MapDraft | MapManifest; activeFrameId: string; mode: string; callbacks: CanvasCallbacks; view?: 'editor' | 'visitor' | 'survey'; selection?: Selection; showReferencePoints?: boolean };
 
-export function GeographicCanvas({ document, activeFrameId, mode, callbacks, view = 'editor' }: CanvasProps) {
+export function GeographicCanvas({ document, activeFrameId, mode, callbacks, view = 'editor', selection = { kind: 'none' }, showReferencePoints = false }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layers = useRef<L.LayerGroup | null>(null);
@@ -49,20 +54,29 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
       map.fitBounds([[frame.bounds.south, frame.bounds.west], [frame.bounds.north, frame.bounds.east]], { animate: false });
       fitFrameRef.current = frame.id;
     }
-    const nodes = document.nodes.filter((node) => node.position.kind === 'geographic' && node.frameId === activeFrameId);
+    const projection = projectMap(document, view, selection);
+    const nodes = [...projection.nodes, ...(view === 'editor' && showReferencePoints ? document.nodes.filter((node) => node.generated) : [])]
+      .filter((node) => node.position.kind === 'geographic' && node.frameId === activeFrameId);
     const byId = new Map(document.nodes.map((node) => [node.id, node]));
-    for (const path of document.paths ?? []) {
-      const points = path.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'geographic' && n.frameId === activeFrameId ? [[n.position.lat, n.position.lng] as L.LatLngTuple] : []; });
-      if (points.length > 1) {
-        const line = L.polyline(points, { color: path.kind === 'stair' ? '#b46926' : '#16776c', weight: 4 }).addTo(group);
-        if (view === 'editor') line.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onPathClick?.(path.id); });
-      }
+    for (const pathLine of projection.lines.filter((item) => item.frameId === activeFrameId)) {
+      const points = pathLine.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'geographic' && n.frameId === activeFrameId ? [[n.position.lat, n.position.lng] as L.LatLngTuple] : []; });
+      if (points.length < 2) continue;
+      const selected = selection.kind === 'path' && selection.id === pathLine.pathId;
+      const line = L.polyline(points, { color: selected ? '#b46926' : '#16776c', weight: selected ? 6 : 4 }).addTo(group);
+      if (view === 'editor') line.on('click', (event) => {
+        L.DomEvent.stopPropagation(event);
+        if (pathLine.legacyEdge) callbacks.onEdgeClick?.(...pathLine.legacyEdge);
+        else callbacks.onPathClick?.(pathLine.pathId);
+      });
     }
-    for (const node of nodes) {
+    const renderedNodes = [...new Map([...nodes, ...projection.handles].map((node) => [node.id, node])).values()];
+    for (const node of renderedNodes) {
       if (node.position.kind !== 'geographic') continue;
+      const handle = projection.handles.some((item) => item.id === node.id) && view === 'editor';
+      const selected = selection.kind === 'node' && selection.id === node.id;
       const marker = L.marker([node.position.lat, node.position.lng], {
         draggable: mode === 'move' && view === 'editor',
-        icon: L.divIcon({ className: 'v5-node-marker', html: '<span aria-hidden="true"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+        icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
       marker.bindTooltip(node.name);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
@@ -71,6 +85,16 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
         callbacks.onNodeMove?.(node.id, { kind: 'geographic', lat: p.lat, lng: p.lng }, activeFrameId);
       });
     }
-  }, [document, activeFrameId, mode, callbacks, view, mapReady]);
+    for (const transition of projection.transitions) {
+      const pair = transition.nodeIds.map((id) => byId.get(id));
+      const localIndex = pair.findIndex((node) => node?.frameId === activeFrameId && node.position.kind === 'geographic');
+      const local = pair[localIndex], other = pair[1 - localIndex];
+      if (!local || !other || local.position.kind !== 'geographic') continue;
+      const label = escapeHtml(`${transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs'} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
+      const badge = L.marker([local.position.lat, local.position.lng], { interactive: view === 'editor', icon: L.divIcon({ className: 'v5-transition-badge', html: `<span>${label}</span>`, iconSize: [132, 24], iconAnchor: [0, 12] }) }).addTo(group);
+      badge.getElement()?.setAttribute('data-transition', transition.id);
+      if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });
+    }
+  }, [document, activeFrameId, mode, callbacks, view, mapReady, selection, showReferencePoints]);
   return <div ref={host} className="map-canvas" role="application" aria-label="Geographic map" />;
 }

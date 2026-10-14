@@ -18,12 +18,31 @@ test('routed V5 static editor loads its PNG and places a real local-coordinate n
   await expect(page.getByRole('heading', { name: 'demo' })).toBeVisible();
   await expect(page.locator('.leaflet-image-layer')).toHaveJSProperty('naturalWidth', 1);
   await page.getByRole('button', { name: 'Node', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'Regular' }).click();
   const canvas = page.getByRole('application', { name: 'Static floor plan' });
   const box = await canvas.boundingBox();
   if (!box) throw new Error('static map canvas has no bounds');
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await expect(page.getByText('6 nodes · 2 paths')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Node n-1/ })).toBeVisible();
+  await expect(page.getByText('Survey point')).toHaveCount(0);
   gpsCalls = await page.evaluate(() => (window as unknown as { __gpsCalls: number }).__gpsCalls);
   expect(gpsCalls).toBe(0);
   expect(requests.some((url) => /tile\.openstreetmap\.org/.test(url))).toBe(false);
+});
+
+test('static editor hides generated sample markers and any path segment selects the whole path', async ({ page }) => {
+  await page.route('**/api/capabilities', (route) => route.fulfill({ json: { mapV5AuthoringEnabled: true } }));
+  await page.route('**/api/admin/venues/demo/draft-v3', (route) => route.fulfill({ json: { ...staticDraft(), venueId: 'demo' } }));
+  await page.route('**/api/admin/venues/demo/layout-assets/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: transparentPng }));
+  await page.goto('/editor/demo');
+  await expect(page.getByRole('heading', { name: 'demo' })).toBeVisible();
+  await expect(page.locator('.v5-node-marker')).toHaveCount(2);
+  const references = page.getByRole('checkbox', { name: 'Show survey reference points' });
+  await references.check();
+  await expect(page.locator('.v5-node-marker')).toHaveCount(3);
+  await references.uncheck();
+  await expect(page.locator('.v5-node-marker')).toHaveCount(2);
+  await page.locator('.leaflet-overlay-pane path').first().dispatchEvent('click');
+  await expect(page.getByRole('heading', { name: 'Path properties' })).toBeVisible();
+  await expect(page.getByLabel('Path name')).toHaveValue('Ground corridor');
 });

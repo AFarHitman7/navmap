@@ -1,6 +1,7 @@
 import type { MapDraft, MapManifest } from '../map-contract';
 import { GeographicCanvas, type CanvasCallbacks } from './GeographicCanvas';
 import { StaticCanvas } from './StaticCanvas';
+import type { Selection } from '../editor-v3/tool-state';
 
 export type CanvasHostProps = {
   document: MapDraft | MapManifest;
@@ -8,6 +9,8 @@ export type CanvasHostProps = {
   activeFrameId: string;
   mode: string;
   callbacks: CanvasCallbacks;
+  selection?: Selection;
+  showReferencePoints?: boolean;
 };
 
 export function CanvasHost(props: CanvasHostProps) {

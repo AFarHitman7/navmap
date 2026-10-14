@@ -85,6 +85,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
   const [pendingPath, setPendingPath] = useState<PathVertex[]>([]);
   const [stairsArmed, setStairsArmed] = useState(false);
   const [selectedPathId, setSelectedPathId] = useState('');
+  const [showReferencePoints, setShowReferencePoints] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<{ from: string; to: string } | null>(null);
   const [floorChoices, setFloorChoices] = useState<ZoneFloorVisibility>({});
   const [showOutdoors, setShowOutdoors] = useState(true);
@@ -746,6 +747,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
           <LayerPicker zones={draft.indoorZones} visibility={visibility} showOutdoors={showOutdoors}
             onFloorChange={(id, floor) => setFloorChoices((choices) => ({ ...choices, [id]: floor }))}
             onOutdoorsChange={setShowOutdoors} />
+          <label className="reference-points-toggle"><input type="checkbox" checked={showReferencePoints} onChange={(event) => setShowReferencePoints(event.target.checked)} /> Show survey reference points</label>
           <div className="map-frame">
             <MapCanvasV3
               draft={draft}
@@ -764,6 +766,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
               onNodeMove={handleNodeMove}
               pathPreview={pendingPath}
               selectedPathId={selectedPathId}
+              showReferencePoints={showReferencePoints}
               onPathClick={selectPath}
               onEdgeClick={selectConnection}
               onError={setError}
@@ -1161,9 +1164,9 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                       {mode === 'connect' && from && <p>Connecting from {from}. Select another point to link them.</p>}
                     </div>
                   )}
-                  {!draft.nodes.length && <p className="empty-hint">No points yet. Choose Add nodes, then click inside the boundary.</p>}
+                  {!draft.nodes.some((n) => showReferencePoints || !n.generated) && <p className="empty-hint">No points yet. Choose Add nodes, then click inside the boundary.</p>}
                   <ul className="point-list" aria-label="Graph nodes">
-                    {draft.nodes.map((n) => (
+                    {draft.nodes.filter((n) => showReferencePoints || !n.generated).map((n) => (
                       <li key={n.id}>
                         <button
                           type="button"

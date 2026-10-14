@@ -32,4 +32,31 @@ describe('static canvas coordinate and lifecycle contract', () => {
     fireEvent.click(container.querySelector('.leaflet-container')!, { detail: 1 });
     expect(callbacks.onPointClick).toHaveBeenCalledWith(expect.objectContaining({ kind: 'local' }), otherFrame.id);
   });
+
+  it('draws one selectable path polyline per frame stretch and hides sample markers by default', async () => {
+    const draft = staticDraft();
+    const polylines = vi.spyOn(L, 'polyline');
+    const markers = vi.spyOn(L, 'marker');
+    polylines.mockClear(); markers.mockClear();
+    const callbacks = { onPathClick: vi.fn(), onEdgeClick: vi.fn() };
+    render(<CanvasHost document={draft} view="editor" activeFrameId="frame-b-a-z0" mode="select" callbacks={callbacks} />);
+    await waitFor(() => expect(polylines).toHaveBeenCalled());
+    expect(polylines).toHaveBeenCalledTimes(1);
+    expect(polylines.mock.calls[0]?.[0]).toHaveLength(3);
+    expect(markers.mock.calls.some(([point]) => Array.isArray(point) && point[0] === 400 && point[1] === 460)).toBe(false);
+    const pathLine = polylines.mock.results[0]?.value;
+    pathLine?.fire('click', { originalEvent: { stopPropagation: vi.fn() } });
+    expect(callbacks.onPathClick).toHaveBeenCalledWith('corr-ground');
+  });
+
+  it('does not render any path lines or editor handles in visitor view', async () => {
+    const polylines = vi.spyOn(L, 'polyline');
+    polylines.mockClear();
+    const imageSpy = vi.spyOn(L, 'imageOverlay');
+    imageSpy.mockClear();
+    const draft = staticDraft();
+    render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(imageSpy).toHaveBeenCalled());
+    expect(polylines).not.toHaveBeenCalled();
+  });
 });

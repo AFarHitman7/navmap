@@ -4,6 +4,9 @@ import 'leaflet/dist/leaflet.css';
 import type { MapDraft, MapManifest } from '../map-contract';
 import type { CanvasProps } from './GeographicCanvas';
 import { fromLeaflet, toLeaflet } from './static-coordinates';
+import { projectMap } from '../editor-v3/presentation';
+
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
 function backgroundUrl(document: MapDraft | MapManifest, assetId: string): string {
   const manifest = document as MapManifest;
@@ -12,7 +15,7 @@ function backgroundUrl(document: MapDraft | MapManifest, assetId: string): strin
     : `/api/admin/venues/${encodeURIComponent(document.venueId)}/layout-assets/${encodeURIComponent(assetId)}`;
 }
 
-export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 'editor' }: CanvasProps) {
+export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 'editor', selection = { kind: 'none' }, showReferencePoints = false }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layers = useRef<L.LayerGroup | null>(null);
@@ -48,21 +51,30 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
       map.fitBounds(bounds, { animate: false });
       fitFrameRef.current = frame.id;
     }
-    const nodes = document.nodes.filter((node) => node.frameId === frame.id && node.position.kind === 'local');
-    const byId = new Map(nodes.map((node) => [node.id, node]));
-    for (const path of document.paths ?? []) {
-      const points = path.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'local' ? [toLeaflet(n.position, frame.background!.width, frame.background!.height)] : []; });
-      if (points.length > 1) {
-        const line = L.polyline(points, { color: path.kind === 'stair' ? '#b46926' : '#16776c', weight: 4 }).addTo(group);
-        if (view === 'editor') line.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onPathClick?.(path.id); });
-      }
+    const projection = projectMap(document, view, selection);
+    const nodes = [...projection.nodes, ...(view === 'editor' && showReferencePoints ? document.nodes.filter((node) => node.generated) : [])]
+      .filter((node) => node.frameId === frame.id && node.position.kind === 'local');
+    const byId = new Map(document.nodes.filter((node) => node.frameId === frame.id).map((node) => [node.id, node]));
+    for (const pathLine of projection.lines.filter((item) => item.frameId === frame.id)) {
+      const points = pathLine.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'local' ? [toLeaflet(n.position, frame.background!.width, frame.background!.height)] : []; });
+      if (points.length < 2) continue;
+      const selected = selection.kind === 'path' && selection.id === pathLine.pathId;
+      const line = L.polyline(points, { color: selected ? '#b46926' : '#16776c', weight: selected ? 6 : 4 }).addTo(group);
+      if (view === 'editor') line.on('click', (event) => {
+        L.DomEvent.stopPropagation(event);
+        if (pathLine.legacyEdge) callbacks.onEdgeClick?.(...pathLine.legacyEdge);
+        else callbacks.onPathClick?.(pathLine.pathId);
+      });
     }
-    for (const node of nodes) {
-      if (node.position.kind !== 'local' || (view === 'visitor' && !node.visitorVisible)) continue;
+    const renderedNodes = [...new Map([...nodes, ...projection.handles].map((node) => [node.id, node])).values()];
+    for (const node of renderedNodes) {
+      if (node.position.kind !== 'local') continue;
       const point = toLeaflet(node.position, frame.background.width, frame.background.height);
+      const handle = projection.handles.some((item) => item.id === node.id) && view === 'editor';
+      const selected = selection.kind === 'node' && selection.id === node.id;
       const marker = L.marker(point, {
         draggable: view === 'editor' && mode === 'move',
-        icon: L.divIcon({ className: 'v5-node-marker', html: '<span aria-hidden="true"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+        icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
       marker.bindTooltip(node.name);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
@@ -72,6 +84,16 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
         callbacks.onNodeMove?.(node.id, p, frame.id);
       });
     }
-  }, [document, activeFrameId, mode, callbacks, view, mapReady]);
+    for (const transition of projection.transitions) {
+      const pair = transition.nodeIds.map((id) => document.nodes.find((node) => node.id === id));
+      const localIndex = pair.findIndex((node) => node?.frameId === frame.id && node.position.kind === 'local');
+      const local = pair[localIndex], other = pair[1 - localIndex];
+      if (!local || !other || local.position.kind !== 'local') continue;
+      const label = escapeHtml(`${transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs'} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
+      const badge = L.marker(toLeaflet(local.position, frame.background.width, frame.background.height), { interactive: view === 'editor', icon: L.divIcon({ className: 'v5-transition-badge', html: `<span>${label}</span>`, iconSize: [132, 24], iconAnchor: [0, 12] }) }).addTo(group);
+      badge.getElement()?.setAttribute('data-transition', transition.id);
+      if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });
+    }
+  }, [document, activeFrameId, mode, callbacks, view, mapReady, selection, showReferencePoints]);
   return <div ref={host} className="map-canvas static-canvas" role="application" aria-label="Static floor plan" />;
 }

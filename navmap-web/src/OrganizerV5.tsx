@@ -10,6 +10,7 @@ import { useBlocker } from 'react-router-dom';
 import { UnsavedChangesDialog } from './editor/UnsavedChangesDialog';
 import { Inspector } from './editor-v3/inspectors/Inspector';
 import { ToolMenu } from './editor-v3/ToolMenu';
+import { ObjectBrowser } from './ObjectBrowser';
 import { endpointAt, endpointForNode, selectionExists, toolLabel, type InspectorView, type PendingGesture, type Selection, type Tool } from './editor-v3/tool-state';
 
 export function OrganizerV5({ venueId, mapName = '' }: { venueId: string; mapName?: string }) {
@@ -24,6 +25,7 @@ export function OrganizerV5({ venueId, mapName = '' }: { venueId: string; mapNam
   const [nodeName, setNodeName] = useState('');
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showReferencePoints, setShowReferencePoints] = useState(false);
   useEffect(() => {
     let live = true;
     void Promise.all([getDraftV5(venueId), isV5AuthoringEnabled()]).then(([draft, allowed]) => {
@@ -37,15 +39,17 @@ export function OrganizerV5({ venueId, mapName = '' }: { venueId: string; mapNam
   if (error) return <section className="page-state" role="alert"><h1>Map unavailable</h1><p>{error}</p></section>;
   if (!initial) return <section className="page-state" role="status"><h1>Loading map</h1><span className="loading-dot" /></section>;
   return <V5Editor key={venueId} initial={initial} enabled={enabled} mapName={mapName} status={status} setStatus={setStatus}
+    showReferencePoints={showReferencePoints} setShowReferencePoints={setShowReferencePoints}
     tool={tool} setTool={setTool} selection={selection} setSelection={setSelection} view={view} setView={setView}
     activeFrameId={activeFrameId} setActiveFrameId={setActiveFrameId} gesture={gesture} setGesture={setGesture}
     nodeName={nodeName} setNodeName={setNodeName} busy={busy} setBusy={setBusy} />;
 }
 
-function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSelection, view, setView, activeFrameId, setActiveFrameId,
+function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSelection, view, setView, activeFrameId, setActiveFrameId, showReferencePoints, setShowReferencePoints,
   gesture, setGesture, nodeName, setNodeName, busy, setBusy, status, setStatus }: {
   initial: MapDraft; enabled: boolean; mapName: string; tool: Tool; setTool: (tool: Tool) => void;
   selection: Selection; setSelection: (selection: Selection) => void; view: InspectorView; setView: (view: InspectorView) => void;
+  showReferencePoints: boolean; setShowReferencePoints: (value: boolean) => void;
   activeFrameId: string; setActiveFrameId: (id: string) => void; gesture: PendingGesture | null; setGesture: Dispatch<SetStateAction<PendingGesture | null>>;
   nodeName: string; setNodeName: (name: string) => void; busy: boolean; setBusy: (busy: boolean) => void; status: string; setStatus: (status: string) => void;
 }) {
@@ -111,6 +115,11 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
     },
     onTransitionClick(transitionId: string) {
       setSelection({ kind: 'transition', id: transitionId });
+      setView('build');
+    },
+    onEdgeClick(from: string, to: string) {
+      const transition = draft.transitions.find((item) => item.nodeIds.includes(from) && item.nodeIds.includes(to));
+      setSelection(transition ? { kind: 'transition', id: transition.id } : { kind: 'node', id: from });
       setView('build');
     },
     onNodeMove(nodeId: string, position: Position, frameId: string) {
@@ -187,13 +196,15 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
             items={[{ label: 'Regular', subtype: 'regular', value: { kind: 'path', subtype: 'regular' } }, { label: 'Stair', subtype: 'stair', value: { kind: 'path', subtype: 'stair' } }]}
             onChoose={chooseTool} />
         </div>
-        <div className="v5-map-frame"><CanvasHost document={draft} view="editor" activeFrameId={activeFrameId} mode={canvasMode} callbacks={callbacks} />
+        <div className="v5-map-frame"><CanvasHost document={draft} view="editor" activeFrameId={activeFrameId} mode={canvasMode} callbacks={callbacks} selection={selection} showReferencePoints={showReferencePoints} />
           {draft.canvas.kind === 'static' && !frame?.background && <div className="v5-unassigned-guidance">Add a plan to this floor before placing nodes or paths.</div>}
         </div>
+        <div className="v5-canvas-options"><label><input type="checkbox" checked={showReferencePoints} onChange={(event) => setShowReferencePoints(event.target.checked)} /> Show survey reference points</label></div>
         <div className="v5-status-row"><p className="v5-status" role="status">{status || (gesture ? `${gesture.kind === 'path' ? gesture.vertices.length : gesture.endpoints.length} ${gesture.kind === 'path' ? 'points' : 'endpoints'} · pending ${gesture.kind}` : `${toolLabel(tool)} · ${frame?.zoneId ? draft.indoorZones.find((zone) => zone.id === frame.zoneId)?.name : 'Outdoor'}`)}</p>
           {gesture && <div className="v5-pending-actions"><button type="button" onClick={() => setTool(gesture.kind === 'path' ? { kind: 'path', subtype: 'regular' } : { kind: 'node', subtype: gesture.kind })}>Resume</button><button type="button" className="text-button" onClick={cancelGesture}>Discard</button></div>}
         </div>
       </div>
+      <ObjectBrowser document={draft} selection={selection} onSelect={(next) => { setSelection(next); setView('build'); setTool({ kind: 'select' }); }} />
       <Inspector document={draft} tool={tool} selection={selection} activeFrameId={activeFrameId} commit={doc.commit} busy={busy || !enabled}
         onSelectionChange={setSelection} onToolChange={setTool} gesture={gesture} onGestureChange={setGesture} nodeName={nodeName} onNodeNameChange={setNodeName}
         onFinishGesture={finishGesture} onCancelGesture={cancelGesture} view={view} onViewChange={setView} onPublish={() => void publish()}

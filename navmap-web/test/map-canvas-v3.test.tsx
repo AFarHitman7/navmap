@@ -278,6 +278,8 @@ describe('MapCanvasV3', () => {
     await screen.findByTestId('leaflet-map-v3');
 
     const landing = leaflet.markers.find((item) => item.options.title === 'Building A ground lobby');
+    expect(leaflet.markers.find((item) => item.options.title === 'Path point n-gen')).toBeUndefined();
+    render(<MapCanvasV3 draft={draft as never} selectedZoneId={null} showReferencePoints />);
     const generated = leaflet.markers.find((item) => item.options.title === 'Path point n-gen');
     expect(landing).toBeDefined();
     expect(generated).toBeDefined();
