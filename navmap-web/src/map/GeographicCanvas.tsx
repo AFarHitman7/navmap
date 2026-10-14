@@ -91,7 +91,8 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
       const localIndex = pair.findIndex((node) => node?.frameId === activeFrameId && node.position.kind === 'geographic' && (view !== 'visitor' || projectedNodeIds.has(node.id)));
       const local = pair[localIndex], other = pair[1 - localIndex];
       if (!local || !other || local.position.kind !== 'geographic') continue;
-      const label = escapeHtml(`${transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs'} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
+      const semanticLabel = transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs';
+      const label = escapeHtml(view === 'visitor' ? semanticLabel : `${semanticLabel} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
       const badge = L.marker([local.position.lat, local.position.lng], { interactive: view === 'editor', icon: L.divIcon({ className: 'v5-transition-badge', html: `<span>${label}</span>`, iconSize: [132, 24], iconAnchor: [0, 12] }) }).addTo(group);
       badge.getElement()?.setAttribute('data-transition', transition.id);
       if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });

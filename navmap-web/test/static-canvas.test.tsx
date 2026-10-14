@@ -61,20 +61,33 @@ describe('static canvas coordinate and lifecycle contract', () => {
   });
 
   it('adds a noninteractive visitor stair badge only to a visible landing', async () => {
-    const draft = staticDraft();
+    const base = staticDraft();
+    const draft = {
+      ...base,
+      indoorZones: base.indoorZones.map((zone) => ({ ...zone, name: 'Restricted wing', floors: zone.floors.map((floor) => floor.z === 1 ? { ...floor, label: 'Secret level' } : floor) })),
+      nodes: base.nodes.map((node) => node.id === 's-a1' ? { ...node, name: 'Secret landing', visitorVisible: false } : node),
+    };
     const markers = vi.spyOn(L, 'marker');
     markers.mockClear();
-    const makeCanvas = (document: typeof draft) => render(<CanvasHost document={document} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
-    const first = makeCanvas(draft);
+    const makeCanvas = (document: typeof draft, view: 'editor' | 'visitor') => render(<CanvasHost document={document} view={view} activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    const editor = makeCanvas(draft, 'editor');
+    await waitFor(() => expect(editor.container.querySelector('.v5-transition-badge span')).not.toBeNull());
+    expect(editor.container.querySelector('.v5-transition-badge span')?.textContent).toContain('Restricted wing floor 1');
+    editor.unmount();
+
+    markers.mockClear();
+    const first = makeCanvas(draft, 'visitor');
     await waitFor(() => expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(true));
     const badge = markers.mock.calls.find(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge');
     expect(badge?.[1]?.interactive).toBe(false);
     expect(badge?.[0]).toEqual([700, 200]);
+    expect(first.container.querySelector('.v5-transition-badge span')?.textContent).toBe('Stairs');
+    expect(first.container.querySelector('.v5-transition-badge')?.textContent).not.toMatch(/Restricted|Secret|floor\s+1/i);
     first.unmount();
 
     markers.mockClear();
     const hidden = { ...draft, nodes: draft.nodes.map((node) => node.id === 's-a0' || node.id === 's-a1' ? { ...node, visitorVisible: false } : node) };
-    makeCanvas(hidden);
+    makeCanvas(hidden, 'visitor');
     await waitFor(() => expect(markers).toHaveBeenCalled());
     expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
   });

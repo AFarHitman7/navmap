@@ -27,13 +27,16 @@ describe('GeographicCanvas presentation', () => {
     const markers = vi.spyOn(L, 'marker');
     polylines.mockClear(); markers.mockClear();
     const draft = geographicDraft();
-    const { rerender } = render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    const { rerender, container } = render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
     await waitFor(() => expect(markers).toHaveBeenCalled());
     expect(polylines).not.toHaveBeenCalled();
     const badges = () => markers.mock.calls.filter(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge');
     await waitFor(() => expect(badges()).toHaveLength(2));
     expect(badges().every(([, options]) => options?.interactive === false)).toBe(true);
     expect(badges().every(([position]) => position[0] === 13.05 && position[1] === 80.245)).toBe(true);
+    const labels = [...container.querySelectorAll('.v5-transition-badge span')].map((badge) => badge.textContent);
+    expect(labels).toEqual(expect.arrayContaining(['Entrance', 'Stairs']));
+    expect(labels.join(' ')).not.toMatch(/floor|outdoor|secret|zone/i);
     markers.mockClear();
     const hidden = { ...draft, nodes: draft.nodes.map((node) => ['n-out', 'n-a0', 'n-a1'].includes(node.id) ? { ...node, visitorVisible: false } : node) };
     rerender(<CanvasHost document={hidden} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);

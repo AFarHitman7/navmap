@@ -40,3 +40,10 @@ Invoked the 15 skills listed in `agent-protocol.md`: using-superpowers, executin
 - Replaced the Playwright synthetic `dispatchEvent('click')` with `page.mouse.click` at the rendered SVG path’s computed geometric midpoint; both desktop and 390px projects still select the whole path.
 - RED/GREEN: new shared-edge tests failed because `removePathV5` removed an edge still referenced by the remaining path; visitor tests failed because visitor projections returned no transitions. All were green after the minimal fixes.
 - Final fix-round checks: `npm test` — 33 files / 263 tests passed; `npm run typecheck`, `npm run lint`, `npm run build` passed; `npm run e2e -- e2e/static-v5-canvas.spec.ts` — 4/4 desktop/mobile tests passed. Build continues to emit the existing large-chunk advisory.
+
+## Fix round 2 — visitor badge label privacy
+
+- Visitor transition badges now show only the semantic kind (`Stairs`, `Entrance`, or `Elevator`) on both geographic and static canvases. Editor badges retain the useful destination zone/floor label.
+- Added rendered-badge assertions for both canvases, including a static-map case with a hidden endpoint named `Secret landing` in `Restricted wing`; the visitor label contains neither endpoint nor zone/floor details. The same test verifies the editor still shows its destination-floor context.
+- RED/GREEN: the new static visitor assertion initially rendered `Stairs · Restricted wing floor 1`; after the scoped change it renders only `Stairs`.
+- Final fix-round checks: focused canvas tests — 9 passed; `npm test` — 33 files / 263 tests passed; `npm run typecheck`, `npm run lint`, and `npm run build` passed. Build continues to emit the existing large-chunk advisory. No E2E changes were made in this round.
