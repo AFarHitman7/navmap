@@ -2,23 +2,41 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { getLatestVersion } from '../db.js';
-import { parseManifestV3 } from '../draft.js';
+import { draftSchemaVersion, parseManifestV3 } from '../draft.js';
+import { parseMapManifest } from '../map-contract.js';
+import { isV5AuthoringEnabled } from '../env.js';
 import { normalizeVenueId } from '../venue-id.js';
 
-function loadManifest(db: DatabaseSync, venueId: string, version: number) {
+/**
+ * Load the stored manifest JSON after validating its schema. V4 documents
+ * validate against the legacy schema; V5 against the frame-aware contract.
+ * Callers send the ORIGINAL stored bytes (never a re-serialized in-memory
+ * upgrade), so immutable V4 responses stay byte-identical V4 JSON.
+ */
+function loadManifestJson(db: DatabaseSync, venueId: string, version: number): string {
   normalizeVenueId(venueId);
   const row = db.prepare('SELECT manifest_json FROM versions WHERE venue_id = ? AND version = ?').get(venueId, version) as
     | { manifest_json: string }
     | undefined;
   if (!row) throw Object.assign(new Error('unknown version'), { statusCode: 404 });
+  let json: unknown;
   try {
-    return parseManifestV3(JSON.parse(row.manifest_json));
+    json = JSON.parse(row.manifest_json);
   } catch {
     throw Object.assign(new Error('unsupported manifest schema; only V3 is served'), { statusCode: 415 });
   }
+  try {
+    if (draftSchemaVersion(json) === 5) parseMapManifest(json);
+    else parseManifestV3(json);
+  } catch {
+    throw Object.assign(new Error('unsupported manifest schema; only V3 is served'), { statusCode: 415 });
+  }
+  return row.manifest_json;
 }
 
 export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): void {
+  app.get('/api/capabilities', async () => ({ mapV5AuthoringEnabled: isV5AuthoringEnabled() }));
+
   app.get('/api/venues/:venueId/latest', async (req, reply) => {
     const { venueId } = req.params as { venueId: string };
     try { normalizeVenueId(venueId); }
@@ -34,8 +52,7 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): vo
     const version = Number(rawVersion);
     if (!Number.isInteger(version) || version <= 0) return reply.code(404).send({ error: 'unknown version' });
     try {
-      const manifest = loadManifest(db, venueId, version);
-      const body = JSON.stringify(manifest);
+      const body = loadManifestJson(db, venueId, version);
       reply.header('cache-control', 'public, max-age=31536000, immutable');
       reply.header('etag', `"${createHash('sha256').update(body).digest('hex')}"`);
       reply.header('content-type', 'application/json');

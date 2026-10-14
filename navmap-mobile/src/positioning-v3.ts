@@ -1,6 +1,7 @@
 import { normalizeBssid } from './scan';
 import { containsPoint } from './geo';
 import type { BoundsV3 } from './contract-v3';
+import type { Rect } from './map-contract';
 export type Reading = { bssid: string; rssi: number };
 export type NodeProfile = { nodeId: string; medianRssi: Record<string, number>; scanCount: number };
 export type NodeMatch = { nodeId: string; score: number; commonAps: number; confidence: 'high' | 'medium' | 'low' };
@@ -54,15 +55,42 @@ export type ZoneEstimate =
   | { kind: 'outdoors' }
   | { kind: 'outside' };
 
-/** GPS classifies zones only — it never identifies a node or floor. */
+type GeoBoundsLike = { north: number; south: number; east: number; west: number };
+type ZoneBoundsLike = BoundsV3 | Rect;
+
+function isGeographicBounds(bounds: unknown): bounds is GeoBoundsLike {
+  if (typeof bounds !== 'object' || bounds === null) return false;
+  const b = bounds as Record<string, unknown>;
+  // Legacy V4 bounds carry no kind discriminant and are always geographic.
+  if (!('kind' in b) || b.kind === undefined) {
+    return (
+      typeof b.north === 'number' && typeof b.south === 'number' && typeof b.east === 'number' && typeof b.west === 'number'
+    );
+  }
+  return (b as { kind?: unknown }).kind === 'geographic';
+}
+
+/**
+ * GPS classifies zones only — it never identifies a node or floor.
+ * Geographic-only: static canvases are bypassed (reported as outside) and
+ * never classified, and static mode never requests geolocation.
+ */
 export function classifyGpsZone(
-  map: { boundary: BoundsV3; indoorZones: Array<{ id: string; bounds: BoundsV3 }> },
+  map: {
+    boundary: BoundsV3 | { kind: string; north?: number; south?: number; east?: number; west?: number } | null;
+    indoorZones: Array<{ id: string; bounds?: ZoneBoundsLike }>;
+    canvas?: { kind: 'geographic' | 'static' };
+  },
   lat: number,
   lng: number,
 ): ZoneEstimate {
-  if (!containsPoint(map.boundary, lat, lng)) return { kind: 'outside' };
+  if (map.canvas?.kind === 'static') return { kind: 'outside' };
+  if (!isGeographicBounds(map.boundary)) return { kind: 'outside' };
+  const boundary = map.boundary as BoundsV3;
+  if (!containsPoint(boundary, lat, lng)) return { kind: 'outside' };
   for (const zone of map.indoorZones) {
-    if (containsPoint(zone.bounds, lat, lng)) return { kind: 'indoors', zoneId: zone.id };
+    if (!isGeographicBounds(zone.bounds)) continue;
+    if (containsPoint(zone.bounds as BoundsV3, lat, lng)) return { kind: 'indoors', zoneId: zone.id };
   }
   return { kind: 'outdoors' };
 }

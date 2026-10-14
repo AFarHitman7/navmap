@@ -254,6 +254,23 @@ export function parseDraftV3(raw: unknown): DraftV3 {
 
 const MANIFEST_KEYS = [...DRAFT_KEYS, 'version', 'profiles'] as const;
 
+function schemaVersionOf(raw: unknown): number | undefined {
+  if (!isRecord(raw) || typeof raw.schemaVersion !== 'number') return undefined;
+  return raw.schemaVersion;
+}
+
+/**
+ * Reader dispatch for mixed V4/V5 storage: V4 documents keep the legacy
+ * readers; V5 documents upgrade in memory only (see map-contract.ts).
+ * Never feed a V5 document into a V4 canvas.
+ */
+export function detectContractKind(raw: unknown): 'v4' | 'v5' | 'unknown' {
+  const version = schemaVersionOf(raw);
+  if (version === 4) return 'v4';
+  if (version === 5) return 'v5';
+  return 'unknown';
+}
+
 export function parseManifestV3(raw: unknown): ManifestV3 {
   if (!isRecord(raw)) fail('not an object');
   checkStrict(raw, MANIFEST_KEYS, 'manifest');

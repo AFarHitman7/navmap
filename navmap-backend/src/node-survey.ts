@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { BSSID_RE, loadDraftV3Json, normalizeBssid, parseDraftV3, type NodeProfileV3 } from './draft.js';
+import { BSSID_RE, draftSchemaVersion, loadDraftV3Json, normalizeBssid, parseDraftV3, type NodeProfileV3 } from './draft.js';
+import { parseMapDraft } from './map-contract.js';
 import { normalizeVenueId } from './venue-id.js';
 
 function median(xs: number[]): number {
@@ -37,10 +38,17 @@ function sanitizeBssid(raw: string): string {
   return bssid;
 }
 
-function loadV3Draft(db: DatabaseSync, venueId: string) {
+/** Draft node reference (V4 or V5): id plus current fingerprint revision. */
+type DraftNodeRef = { id: string; fingerprintRevision: number };
+
+function loadDraftNodeRefs(db: DatabaseSync, venueId: string): Map<string, DraftNodeRef> {
   const raw = loadDraftV3Json(db, venueId);
   if (!raw) throw Object.assign(new Error(`no v3 draft for venue ${venueId}`), { statusCode: 404 });
-  return parseDraftV3(JSON.parse(raw));
+  const json = JSON.parse(raw);
+  // V5 drafts dispatch to the frame-aware contract; V4 keeps the legacy path.
+  const nodes: DraftNodeRef[] =
+    draftSchemaVersion(json) === 5 ? parseMapDraft(json).nodes : parseDraftV3(json).nodes;
+  return new Map(nodes.map((n) => [n.id, { id: n.id, fingerprintRevision: n.fingerprintRevision }]));
 }
 
 export function loadNodeSamples(
@@ -84,8 +92,7 @@ export function addNodeSamples(
 ): number {
   normalizeVenueId(venueId);
   if (scans.length > 20) throw Object.assign(new Error('at most 20 scans per request'), { statusCode: 400 });
-  const draft = loadV3Draft(db, venueId);
-  const node = draft.nodes.find((n) => n.id === nodeId);
+  const node = loadDraftNodeRefs(db, venueId).get(nodeId);
   if (!node) throw Object.assign(new Error(`unknown node: ${nodeId}`), { statusCode: 400 });
   const seen = new Set<number>();
   const normalized = scans.map((scan) => {

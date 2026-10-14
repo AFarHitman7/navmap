@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { blankDraftV3Json, DEMO_VENUE_ID, getLatestVersion } from './db.js';
+import { blankDraftV3Json, blankDraftV5Json, DEMO_VENUE_ID, getLatestVersion } from './db.js';
 import { normalizeVenueId, normalizeVenueName, VENUE_ID_RE, VENUE_NAME_MAX } from './venue-id.js';
 
 export { normalizeVenueId, normalizeVenueName, VENUE_ID_RE, VENUE_NAME_MAX };
@@ -23,14 +23,16 @@ export function listVenues(db: DatabaseSync): VenueSummary[] {
   return rows.map((r) => ({ id: r.id, name: r.name, latestVersion: getLatestVersion(db, r.id) }));
 }
 
-export function createVenue(db: DatabaseSync, name: string): VenueSummary {
+export function createVenue(db: DatabaseSync, name: string, draftKind: 'v4' | 'geographic' | 'static' = 'v4'): VenueSummary {
   const clean = normalizeVenueName(name);
   const id = randomUUID().toLowerCase();
   normalizeVenueId(id);
+  // Legacy default stays V4; V5 blanks are explicit per canvas kind.
+  const blank = draftKind === 'v4' ? blankDraftV3Json(id) : blankDraftV5Json(id, draftKind);
   db.exec('BEGIN');
   try {
     db.prepare('INSERT INTO venues (id, name) VALUES (?, ?)').run(id, clean);
-    db.prepare('INSERT INTO drafts_v3 (venue_id, json) VALUES (?, ?)').run(id, blankDraftV3Json(id));
+    db.prepare('INSERT INTO drafts_v3 (venue_id, json) VALUES (?, ?)').run(id, blank);
     db.prepare('INSERT OR IGNORE INTO aps (venue_id, json) VALUES (?, ?)').run(id, JSON.stringify([]));
     db.exec('COMMIT');
   } catch (err) {

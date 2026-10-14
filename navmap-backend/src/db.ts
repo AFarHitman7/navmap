@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadEnvFile, resolveDataPaths } from './env.js';
+import { parseMapDraft } from './map-contract.js';
 
 export type Db = DatabaseSync;
 
@@ -19,6 +20,27 @@ export function blankDraftV3Json(venueId: string = DEMO_VENUE_ID): string {
     anchors: [],
     aps: [],
   });
+}
+
+/** Blank V5 draft for explicit canvas-kind creation (strictly validated). */
+export function blankDraftV5Json(venueId: string, kind: 'geographic' | 'static'): string {
+  return JSON.stringify(
+    parseMapDraft({
+      schemaVersion: 5,
+      venueId,
+      canvas: { kind },
+      boundary: kind === 'static' ? { kind: 'local', left: 0, top: 0, right: 1, bottom: 1 } : null,
+      indoorZones: [],
+      frames: [],
+      nodes: [],
+      edges: [],
+      paths: [],
+      transitions: [],
+      places: [],
+      anchors: [],
+      aps: [],
+    }),
+  );
 }
 
 export function openDb(dbPath: string): DatabaseSync {
@@ -46,8 +68,8 @@ export function initializeSchema(db: DatabaseSync): void {
       } catch {
         schemaVersion = undefined;
       }
-      if (schemaVersion !== 4) {
-        throw new Error('legacy schema detected; run the explicit local data reset before starting the V4 backend');
+      if (schemaVersion !== 4 && schemaVersion !== 5) {
+        throw new Error('legacy schema detected; run the explicit local data reset before starting the V4/V5 backend');
       }
     }
   }
@@ -60,8 +82,8 @@ export function initializeSchema(db: DatabaseSync): void {
       } catch {
         schemaVersion = undefined;
       }
-      if (schemaVersion !== 4) {
-        throw new Error('legacy schema detected; run the explicit local data reset before starting the V4 backend');
+      if (schemaVersion !== 4 && schemaVersion !== 5) {
+        throw new Error('legacy schema detected; run the explicit local data reset before starting the V4/V5 backend');
       }
     }
   }

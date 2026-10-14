@@ -33,6 +33,22 @@ export function rectsOverlap(a: BoundsV3, b: BoundsV3): boolean {
   return a.south < b.north && b.south < a.north && a.west < b.east && b.west < a.east;
 }
 
+export type LocalBoundsV3 = { left: number; top: number; right: number; bottom: number };
+
+/** Local (unit source-pixel space) containment for static frames. */
+export function containsLocalPoint(b: LocalBoundsV3, x: number, y: number): boolean {
+  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+}
+
+export function containsLocalBounds(outer: LocalBoundsV3, inner: LocalBoundsV3): boolean {
+  return inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom;
+}
+
+/** Positive-area overlap only; touching edges return false. */
+export function localRectsOverlap(a: LocalBoundsV3, b: LocalBoundsV3): boolean {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
 export function distanceMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 6371000;
   const dLa = ((bLat - aLat) * Math.PI) / 180;

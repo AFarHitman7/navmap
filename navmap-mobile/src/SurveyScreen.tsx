@@ -4,6 +4,7 @@ import { canRequestScan, collectDistinctScans, type SurveyScan, type WifiScanRes
 import type { HttpPost, TokenStore } from './api';
 import { apiBase } from './pack';
 import type { DraftV3, ManifestV3 } from './contract-v3';
+import type { MapDraft, MapManifest, MapNode } from './map-contract';
 import { pathPointLabels, orderSurveyNodes } from './path-survey';
 
 /** Upload node samples; defaults to POST /api/admin/venues/:venueId/node-samples. */
@@ -23,8 +24,8 @@ export type SurveyScreenProps = {
   tokenStore: TokenStore;
   onSaved: (count: number) => void;
   venueId?: string;
-  /** v3 map to survey any node in (place flow is used when absent). */
-  draft: DraftV3 | ManifestV3;
+  /** v3 map to survey any node in (place flow is used when absent). V4 or V5. */
+  draft: DraftV3 | ManifestV3 | MapDraft | MapManifest;
   postNodeSamples?: PostNodeSamples;
 };
 
@@ -40,9 +41,18 @@ export default SurveyScreen;
 
 const OUTDOORS = 'outdoors';
 
+/** Coordinate summary for V4 (lat/lng) or V5 (frame position) nodes. */
+function describeCoords(node: { lat?: number; lng?: number } & Partial<MapNode>): string {
+  if ('position' in node && node.position !== undefined) {
+    const p = node.position as MapNode['position'];
+    return p.kind === 'geographic' ? `${p.lat}, ${p.lng}` : `${p.x}, ${p.y}`;
+  }
+  return `${(node as { lat: number }).lat}, ${(node as { lng: number }).lng}`;
+}
+
 /** v3 survey for any node: venue is fixed, then zone > floor > node cascade. */
 function NodeSurveyScreen(
-  props: SurveyScreenProps & { draft: DraftV3 | ManifestV3 },
+  props: SurveyScreenProps & { draft: DraftV3 | ManifestV3 | MapDraft | MapManifest },
 ): React.JSX.Element {
   const { draft } = props;
   const venueId = props.venueId ?? draft.venueId;
@@ -160,9 +170,7 @@ function NodeSurveyScreen(
           <Text>Node {node.name} ({node.id})</Text>
           <Text>Zone {zone ? `${zone.id} (${zone.name})` : 'Outdoors'}</Text>
           <Text>Floor {floorLabel ?? String(node.z)}</Text>
-          <Text>
-            Coords {node.lat}, {node.lng}
-          </Text>
+          <Text>Coords {describeCoords(node)}</Text>
           {pathPointLabels(draft, node.id).map((l) => (
             <Text key={l.pathId}>
               {l.pathName} · Point {l.index} of {l.total}

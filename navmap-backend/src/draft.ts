@@ -51,6 +51,15 @@ export type PathV3 = z.infer<typeof pathV3Schema>;
 export type NodeProfileV3 = z.infer<typeof nodeProfileSchema>;
 export function parseDraftV3(raw: unknown): DraftV3 { return draftV3Schema.parse(raw); }
 
+/** Dispatch helper for mixed V4/V5 storage: inspects schemaVersion without parsing. */
+export function draftSchemaVersion(raw: unknown): 4 | 5 | undefined {
+  if (typeof raw === 'object' && raw !== null && 'schemaVersion' in raw) {
+    const v = (raw as { schemaVersion?: unknown }).schemaVersion;
+    if (v === 4 || v === 5) return v;
+  }
+  return undefined;
+}
+
 export const manifestV3Schema = z.object({
   schemaVersion: z.literal(4), venueId: venueIdSchema, version: z.number().int().positive(),
   boundary: boundsSchema, indoorZones: z.array(indoorZoneSchema), nodes: z.array(nodeSchema),
