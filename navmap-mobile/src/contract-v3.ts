@@ -1,5 +1,9 @@
 // v3 unified geographic contract (mirrors backend draftV3Schema, no shared package).
 //
+// LEGACY V4 contract: preserved as-is for existing readers. New saves use the
+// explicit V5 geographic/static contract in ./map-contract.ts; V4 documents
+// upgrade to V5 in memory only (see upgradeV4Draft/upgradeV4Manifest).
+//
 // NOTE: navmap-mobile has no zod dependency, so this module hand-rolls the
 // same structural checks as the backend zod schemas in
 // navmap-backend/src/draft.ts (draftV3Schema). Field names, ranges, strict
@@ -46,7 +50,7 @@ export type ManifestV3 = Omit<DraftV3, 'boundary'> & {
   profiles: NodeProfileV3[];
 };
 
-const VENUE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const VENUE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const EDGE_KINDS = ['path', 'entrance', 'stairs', 'elevator'] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {

@@ -2,6 +2,10 @@ import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
 import { VENUE_ID_RE } from './venue-id.js';
 
+// LEGACY V4 contract: preserved as-is for existing readers. New saves use the
+// explicit V5 geographic/static contract in ./map-contract.ts; V4 documents
+// upgrade to V5 in memory only (see upgradeV4Draft/upgradeV4Manifest).
+
 export const venueIdSchema = z.string().regex(VENUE_ID_RE);
 export const BSSID_RE = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/;
 export const normalizeBssid = (bssid: string): string => bssid.trim().toUpperCase();
