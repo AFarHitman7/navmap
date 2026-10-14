@@ -2,8 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { geographicDraft, staticDraft } from '../src/fixtures/map-v5';
 import { parseMapDraft, type MapDraft } from '../src/map-contract';
-import { addNodeAtV5, addPlaceToNodeV5, connectNodesV5 } from '../src/editor-v3/model';
+import { addNodeAtV5, addPlaceToNodeV5, connectNodesV5, removePathV5 } from '../src/editor-v3/model';
 import { addDrawnPathV5, removeDrawnPath } from '../src/editor-v3/paths';
+import { shortestPathV3 } from '../src/route-v3';
 
 describe('V5 graph editing', () => {
   it('accepts the same local position on different floors', () => {
@@ -137,5 +138,16 @@ describe('V5 graph editing', () => {
     expect(next.anchors).toHaveLength(1);
     expect(next.nodes.some((n) => n.id === junctionId)).toBe(false);
     parseMapDraft(next);
+  });
+
+  it.each(['corr-ground', 'corr-shared'])('preserves an edge and routes when deleting %s from shared path ownership', (removeId) => {
+    const base = staticDraft();
+    const draft = parseMapDraft({ ...base, paths: [...base.paths!, { id: 'corr-shared', name: 'Shared lobby segment', kind: 'regular', nodeIds: ['s-a0', 's-a0b'] }] });
+    const expectedRoute = shortestPathV3(draft, 's-a0', 's-a0b');
+    const next = removePathV5(draft, removeId);
+    expect(next.paths?.some((path) => path.nodeIds.includes('s-a0') && path.nodeIds.includes('s-a0b'))).toBe(true);
+    expect(next.edges.some((edge) => [edge.from, edge.to].includes('s-a0') && [edge.from, edge.to].includes('s-a0b'))).toBe(true);
+    expect(shortestPathV3(next, 's-a0', 's-a0b')).toEqual(expectedRoute);
+    expect(() => parseMapDraft(next)).not.toThrow();
   });
 });

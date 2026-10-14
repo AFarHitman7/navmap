@@ -22,13 +22,22 @@ describe('GeographicCanvas presentation', () => {
     expect(callbacks.onPathClick).toHaveBeenCalledWith('route-1');
   });
 
-  it('projects no path lines or transition badges in visitor mode', async () => {
+  it('projects no path lines and only noninteractive badges at visible visitor landings', async () => {
     const polylines = vi.spyOn(L, 'polyline');
     const markers = vi.spyOn(L, 'marker');
     polylines.mockClear(); markers.mockClear();
-    render(<CanvasHost document={geographicDraft()} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    const draft = geographicDraft();
+    const { rerender } = render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
     await waitFor(() => expect(markers).toHaveBeenCalled());
     expect(polylines).not.toHaveBeenCalled();
-    expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
+    const badges = () => markers.mock.calls.filter(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge');
+    await waitFor(() => expect(badges()).toHaveLength(2));
+    expect(badges().every(([, options]) => options?.interactive === false)).toBe(true);
+    expect(badges().every(([position]) => position[0] === 13.05 && position[1] === 80.245)).toBe(true);
+    markers.mockClear();
+    const hidden = { ...draft, nodes: draft.nodes.map((node) => ['n-out', 'n-a0', 'n-a1'].includes(node.id) ? { ...node, visitorVisible: false } : node) };
+    rerender(<CanvasHost document={hidden} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(markers).toHaveBeenCalled());
+    expect(badges()).toHaveLength(0);
   });
 });

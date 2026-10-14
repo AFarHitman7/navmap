@@ -699,15 +699,22 @@ export function removePathV5(draft: MapDraft, id: string): MapDraft {
     const a = path.nodeIds[index]!;
     return a < nodeId ? `${a}\0${nodeId}` : `${nodeId}\0${a}`;
   }));
-  const otherPathNodes = new Set((draft.paths ?? []).filter((item) => item.id !== id).flatMap((item) => item.nodeIds));
+  const remainingPaths = (draft.paths ?? []).filter((item) => item.id !== id);
+  const otherPathNodes = new Set(remainingPaths.flatMap((item) => item.nodeIds));
+  const remainingPathPairs = new Set(remainingPaths.flatMap((item) => item.nodeIds.slice(1).map((nodeId, index) => {
+    const a = item.nodeIds[index]!;
+    return a < nodeId ? `${a}\0${nodeId}` : `${nodeId}\0${a}`;
+  })));
   const removable = new Set(path.nodeIds.filter((nodeId) => {
     const node = draft.nodes.find((item) => item.id === nodeId);
     if (!node?.generated || otherPathNodes.has(nodeId) || draft.places.some((item) => item.nodeId === nodeId) || draft.anchors.some((item) => item.nodeId === nodeId)) return false;
     return !draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && !pathPairs.has(edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`));
   }));
-  const remainingPaths = (draft.paths ?? []).filter((item) => item.id !== id);
   return parseMapDraft({ ...draft, paths: remainingPaths,
-    edges: draft.edges.filter((edge) => !pathPairs.has(edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`)),
+    edges: draft.edges.filter((edge) => {
+      const key = edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`;
+      return !pathPairs.has(key) || remainingPathPairs.has(key);
+    }),
     nodes: draft.nodes.filter((node) => !removable.has(node.id)),
   });
 }

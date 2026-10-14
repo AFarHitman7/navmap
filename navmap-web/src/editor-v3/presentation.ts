@@ -54,6 +54,8 @@ export function projectMap(document: MapDraft | MapManifest, view: MapView, sele
     })() : [];
   const transitions = view === 'editor'
     ? document.transitions.filter((transition) => transition.nodeIds.some((id) => visibleIds.has(id)))
+    : view === 'visitor'
+      ? document.transitions.filter((transition) => transition.nodeIds.some((id) => nodeById.get(id)?.visitorVisible === true))
     : [];
   return { nodes, lines, handles, transitions };
 }

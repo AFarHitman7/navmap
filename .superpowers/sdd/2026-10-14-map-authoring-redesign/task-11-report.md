@@ -32,3 +32,11 @@ Implemented the Task 11 projection and wired it into both production V5 canvases
 ## Skills and concerns
 
 Invoked the 15 skills listed in `agent-protocol.md`: using-superpowers, executing-plans, using-git-worktrees, test-driven-development, systematic-debugging, verification-before-completion, requesting-code-review, receiving-code-review, frontend-design, ui-design, anti-ui-slop, better-typography, vercel-react-best-practices, webapp-testing, and code-security-auditor. No subagents/reviewers were spawned per protocol. UI work follows the existing V5 editor tokens; no Uizze reference integration was available or needed. Security review was scoped to the newly rendered Leaflet badge HTML and no dependencies were added. Mobile survey/native behavior was not changed, so no mobile suite was run. Full Task 16 release/browser acceptance remains out of scope.
+
+## Fix round 1 — review findings
+
+- Shared path deletion now preserves an undirected graph edge whenever any remaining path still contains that node pair. Added parameterized coverage deleting either owner, strict-parsing the result, and verifying `shortestPathV3` remains unchanged.
+- Visitor projection now exposes a transition descriptor only when an endpoint is explicitly `visitorVisible`; visitor canvases place noninteractive badges at an existing visible landing in the active frame. Hidden endpoints are not rendered as graph markers, and visitor lines/handles remain empty. Geographic/static canvas tests cover visible and fully-hidden transition pairs.
+- Replaced the Playwright synthetic `dispatchEvent('click')` with `page.mouse.click` at the rendered SVG path’s computed geometric midpoint; both desktop and 390px projects still select the whole path.
+- RED/GREEN: new shared-edge tests failed because `removePathV5` removed an edge still referenced by the remaining path; visitor tests failed because visitor projections returned no transitions. All were green after the minimal fixes.
+- Final fix-round checks: `npm test` — 33 files / 263 tests passed; `npm run typecheck`, `npm run lint`, `npm run build` passed; `npm run e2e -- e2e/static-v5-canvas.spec.ts` — 4/4 desktop/mobile tests passed. Build continues to emit the existing large-chunk advisory.

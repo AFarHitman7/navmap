@@ -40,7 +40,18 @@ describe('map presentation projection', () => {
     const visitor = projectMap(draft, 'visitor', { kind: 'path', id: draft.paths![0]!.id });
     expect(visitor.lines).toEqual([]);
     expect(visitor.handles).toEqual([]);
-    expect(visitor.transitions).toEqual([]);
+    expect(visitor.transitions.map((transition) => transition.id)).toEqual(['tr-n-out-n-a0', 'tr-n-a0-n-a1']);
     expect(visitor.nodes.every((node) => node.visitorVisible)).toBe(true);
+  });
+
+  it('projects only transitions with a visitor-visible landing, without exposing hidden endpoints', () => {
+    const base = staticDraft();
+    const draft = { ...base, nodes: base.nodes.map((node) => node.id === 's-a1' ? { ...node, visitorVisible: false } : node) };
+    const visitor = projectMap(draft, 'visitor', { kind: 'none' });
+    expect(visitor.transitions.map((item) => item.id)).toEqual(['tr-s-a0-s-a1']);
+    expect(visitor.nodes.map((node) => node.id)).toContain('s-a0');
+    expect(visitor.nodes.map((node) => node.id)).not.toContain('s-a1');
+    const hidden = { ...draft, nodes: draft.nodes.map((node) => node.id === 's-a0' || node.id === 's-a1' ? { ...node, visitorVisible: false } : node) };
+    expect(projectMap(hidden, 'visitor', { kind: 'none' }).transitions).toEqual([]);
   });
 });

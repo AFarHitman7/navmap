@@ -42,7 +42,14 @@ test('static editor hides generated sample markers and any path segment selects 
   await expect(page.locator('.v5-node-marker')).toHaveCount(3);
   await references.uncheck();
   await expect(page.locator('.v5-node-marker')).toHaveCount(2);
-  await page.locator('.leaflet-overlay-pane path').first().dispatchEvent('click');
+  const segment = page.locator('.leaflet-overlay-pane path').first();
+  const hit = await segment.evaluate((element: SVGPathElement) => {
+    const point = element.getPointAtLength(element.getTotalLength() / 2);
+    const matrix = element.getScreenCTM();
+    if (!matrix) throw new Error('path segment has no screen transform');
+    return { x: matrix.a * point.x + matrix.c * point.y + matrix.e, y: matrix.b * point.x + matrix.d * point.y + matrix.f };
+  });
+  await page.mouse.click(hit.x, hit.y);
   await expect(page.getByRole('heading', { name: 'Path properties' })).toBeVisible();
   await expect(page.getByLabel('Path name')).toHaveValue('Ground corridor');
 });

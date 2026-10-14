@@ -54,6 +54,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
     const projection = projectMap(document, view, selection);
     const nodes = [...projection.nodes, ...(view === 'editor' && showReferencePoints ? document.nodes.filter((node) => node.generated) : [])]
       .filter((node) => node.frameId === frame.id && node.position.kind === 'local');
+    const projectedNodeIds = new Set(projection.nodes.map((node) => node.id));
     const byId = new Map(document.nodes.filter((node) => node.frameId === frame.id).map((node) => [node.id, node]));
     for (const pathLine of projection.lines.filter((item) => item.frameId === frame.id)) {
       const points = pathLine.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'local' ? [toLeaflet(n.position, frame.background!.width, frame.background!.height)] : []; });
@@ -86,7 +87,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
     }
     for (const transition of projection.transitions) {
       const pair = transition.nodeIds.map((id) => document.nodes.find((node) => node.id === id));
-      const localIndex = pair.findIndex((node) => node?.frameId === frame.id && node.position.kind === 'local');
+      const localIndex = pair.findIndex((node) => node?.frameId === frame.id && node.position.kind === 'local' && (view !== 'visitor' || projectedNodeIds.has(node.id)));
       const local = pair[localIndex], other = pair[1 - localIndex];
       if (!local || !other || local.position.kind !== 'local') continue;
       const label = escapeHtml(`${transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs'} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);

@@ -59,4 +59,23 @@ describe('static canvas coordinate and lifecycle contract', () => {
     await waitFor(() => expect(imageSpy).toHaveBeenCalled());
     expect(polylines).not.toHaveBeenCalled();
   });
+
+  it('adds a noninteractive visitor stair badge only to a visible landing', async () => {
+    const draft = staticDraft();
+    const markers = vi.spyOn(L, 'marker');
+    markers.mockClear();
+    const makeCanvas = (document: typeof draft) => render(<CanvasHost document={document} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    const first = makeCanvas(draft);
+    await waitFor(() => expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(true));
+    const badge = markers.mock.calls.find(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge');
+    expect(badge?.[1]?.interactive).toBe(false);
+    expect(badge?.[0]).toEqual([700, 200]);
+    first.unmount();
+
+    markers.mockClear();
+    const hidden = { ...draft, nodes: draft.nodes.map((node) => node.id === 's-a0' || node.id === 's-a1' ? { ...node, visitorVisible: false } : node) };
+    makeCanvas(hidden);
+    await waitFor(() => expect(markers).toHaveBeenCalled());
+    expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
+  });
 });

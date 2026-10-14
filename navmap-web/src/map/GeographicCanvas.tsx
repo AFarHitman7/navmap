@@ -58,6 +58,7 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
     const nodes = [...projection.nodes, ...(view === 'editor' && showReferencePoints ? document.nodes.filter((node) => node.generated) : [])]
       .filter((node) => node.position.kind === 'geographic' && node.frameId === activeFrameId);
     const byId = new Map(document.nodes.map((node) => [node.id, node]));
+    const projectedNodeIds = new Set(projection.nodes.map((node) => node.id));
     for (const pathLine of projection.lines.filter((item) => item.frameId === activeFrameId)) {
       const points = pathLine.nodeIds.flatMap((id) => { const n = byId.get(id); return n?.position.kind === 'geographic' && n.frameId === activeFrameId ? [[n.position.lat, n.position.lng] as L.LatLngTuple] : []; });
       if (points.length < 2) continue;
@@ -87,7 +88,7 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
     }
     for (const transition of projection.transitions) {
       const pair = transition.nodeIds.map((id) => byId.get(id));
-      const localIndex = pair.findIndex((node) => node?.frameId === activeFrameId && node.position.kind === 'geographic');
+      const localIndex = pair.findIndex((node) => node?.frameId === activeFrameId && node.position.kind === 'geographic' && (view !== 'visitor' || projectedNodeIds.has(node.id)));
       const local = pair[localIndex], other = pair[1 - localIndex];
       if (!local || !other || local.position.kind !== 'geographic') continue;
       const label = escapeHtml(`${transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs'} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
