@@ -6,6 +6,8 @@ import { addNodeAtV5, moveNodeV5 } from './editor-v3/model';
 import { addDrawnPathV5, type PathVertexV5 } from './editor-v3/paths';
 import { useEditorDocument } from './editor-v3/useEditorDocument';
 import { CanvasHost } from './map/CanvasHost';
+import { useBlocker } from 'react-router-dom';
+import { UnsavedChangesDialog } from './editor/UnsavedChangesDialog';
 
 type Tool = 'select' | 'place-node' | 'draw-path' | 'move';
 
@@ -44,6 +46,7 @@ function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFra
   const doc = useEditorDocument(initial);
   const { commit } = doc;
   const draft = doc.document;
+  const blocker = useBlocker(doc.dirty || pending.length > 0);
   const frame = draft.frames.find((candidate) => candidate.id === activeFrameId);
   const canAuthor = enabled && !busy && Boolean(frame) && (draft.canvas.kind !== 'static' || Boolean(frame?.background));
   const callbacks = useMemo(() => ({
@@ -59,12 +62,16 @@ function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFra
       if (canAuthor) commit('Move node', (current) => moveNodeV5(current, nodeId, frameId, position));
     },
   }), [canAuthor, activeFrameId, tool, pending, commit, setPending]);
-  async function save() {
-    if (!enabled || busy) return;
+  async function save(): Promise<boolean> {
+    if (!enabled || busy) return false;
     setBusy(true); setStatus('Saving…');
-    try { const saved = await saveDraftV5(draft); doc.markSaved(saved); setStatus('Saved'); }
-    catch (cause) { setStatus(cause instanceof Error ? cause.message : 'Save failed'); }
+    try { const saved = await saveDraftV5(draft); doc.markSaved(saved); setStatus('Saved'); return true; }
+    catch (cause) { setStatus(`Save failed: ${cause instanceof Error ? cause.message : 'Unknown error'}`); return false; }
     finally { setBusy(false); }
+  }
+  async function saveAndContinue() {
+    if (pending.length) return;
+    if (await save()) blocker.proceed?.();
   }
   async function publish() {
     if (!enabled || busy) return;
@@ -83,6 +90,8 @@ function V5Editor({ initial, enabled, tool, setTool, activeFrameId, setActiveFra
     <header className="v5-editor-header"><div><p className="eyebrow">MAP AUTHORING · V5</p><h1>{draft.venueId}</h1><p>{draft.canvas.kind === 'static' ? 'Static floor plan' : 'Geographic map'} · {doc.dirty ? 'Unsaved changes' : 'Saved'}</p></div>
       <div className="workspace-actions"><button type="button" disabled={!doc.canUndo || busy} onClick={doc.undo}>Undo</button><button type="button" disabled={!doc.canRedo || busy} onClick={doc.redo}>Redo</button><button type="button" disabled={!enabled || busy || !doc.dirty} onClick={() => void save()}>Save</button><button type="button" className="primary" disabled={!enabled || busy} onClick={() => void publish()}>Publish</button></div>
     </header>
+    <UnsavedChangesDialog open={blocker.state === 'blocked'} busy={busy} saveDisabled={pending.length > 0} saveError={pending.length ? 'Finish or clear the current drawing before saving.' : status.startsWith('Save failed') ? status : null}
+      onSave={() => void saveAndContinue()} onDiscard={() => blocker.proceed?.()} onCancel={() => blocker.reset?.()} />
     {!enabled && <p className="notice" role="status">V5 authoring is disabled by the server. This map is read-only.</p>}
     <section className="v5-editor-layout">
       <div className="v5-canvas-column">

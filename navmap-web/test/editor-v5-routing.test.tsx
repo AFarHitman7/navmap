@@ -5,7 +5,14 @@ import { getDraftV5 } from '../src/api-v3';
 
 vi.mock('../src/api-v3', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/api-v3')>();
-  return { ...actual, getDraftV5: vi.fn(), isV5AuthoringEnabled: vi.fn().mockResolvedValue(true) };
+  return {
+    ...actual,
+    getDraftV5: vi.fn(),
+    getDraftVersion: vi.fn().mockResolvedValue(5),
+    getCapabilities: vi.fn().mockResolvedValue({ mapV5AuthoringEnabled: true }),
+    listMaps: vi.fn().mockResolvedValue([]),
+    isV5AuthoringEnabled: vi.fn().mockResolvedValue(true),
+  };
 });
 
 describe('routed V5 authoring', () => {

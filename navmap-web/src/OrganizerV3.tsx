@@ -230,7 +230,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
   let blocker: { state: string; proceed?: () => void; reset?: () => void } = { state: 'unblocked' };
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    blocker = useBlocker(dirty && phase === 'ready') as { state: string; proceed?: () => void; reset?: () => void };
+    blocker = useBlocker((dirty || pendingPath.length > 0 || stairsArmed || candidate !== null || Boolean(from)) && phase === 'ready') as { state: string; proceed?: () => void; reset?: () => void };
   } catch {
     blocker = { state: 'unblocked' };
   }
@@ -625,7 +625,8 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
       <UnsavedChangesDialog
         open={blocker.state === 'blocked'}
         busy={!!busy}
-        saveError={saveError}
+        saveError={pendingPath.length || stairsArmed || candidate || from ? 'Finish or cancel the current drawing or connection before saving.' : saveError}
+        saveDisabled={pendingPath.length > 0 || stairsArmed || candidate !== null || Boolean(from)}
         onSave={() =>
           void (async () => {
             const ok = await save(false);

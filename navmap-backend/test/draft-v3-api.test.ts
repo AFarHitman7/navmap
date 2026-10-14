@@ -14,6 +14,56 @@ const DRAFT = {
 };
 
 describe('v3 api', () => {
+  it('creates static maps with a V5 draft atomically when authoring is enabled', async () => {
+    const prior = process.env.MAP_V5_AUTHORING_ENABLED;
+    process.env.MAP_V5_AUTHORING_ENABLED = '1';
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const headers = { cookie, origin: 'http://localhost' };
+      const staticCreated = await app.inject({ method: 'POST', url: '/api/admin/venues', headers, payload: { name: 'Gallery', canvasKind: 'static' } });
+      const geoCreated = await app.inject({ method: 'POST', url: '/api/admin/venues', headers, payload: { name: 'Gallery', canvasKind: 'geographic' } });
+      expect(staticCreated.statusCode).toBe(201);
+      expect(geoCreated.statusCode).toBe(201);
+      const staticMap = staticCreated.json();
+      const geoMap = geoCreated.json();
+      expect(staticMap.id).not.toBe(geoMap.id);
+      const staticUrl = `/api/admin/venues/${staticMap.id}/draft-v3`;
+      const geoUrl = `/api/admin/venues/${geoMap.id}/draft-v3`;
+      const staticDraft = (await app.inject({ method: 'GET', url: staticUrl, headers })).json();
+      const geoDraft = (await app.inject({ method: 'GET', url: geoUrl, headers })).json();
+      expect(staticDraft).toMatchObject({ schemaVersion: 5, venueId: staticMap.id, canvas: { kind: 'static' } });
+      expect(geoDraft).toMatchObject({ schemaVersion: 5, venueId: geoMap.id, canvas: { kind: 'geographic' } });
+      const saved = await app.inject({ method: 'PUT', url: staticUrl, headers, payload: staticDraft });
+      expect(saved.statusCode).toBe(200);
+      expect((await app.inject({ method: 'GET', url: geoUrl, headers })).json()).toMatchObject({ canvas: { kind: 'geographic' }, venueId: geoMap.id });
+      const renamed = await app.inject({ method: 'PATCH', url: `/api/admin/venues/${staticMap.id}`, headers, payload: { name: 'Gallery North' } });
+      expect(renamed.json()).toMatchObject({ id: staticMap.id, name: 'Gallery North' });
+    } finally {
+      discardDb(db);
+      if (prior === undefined) delete process.env.MAP_V5_AUTHORING_ENABLED;
+      else process.env.MAP_V5_AUTHORING_ENABLED = prior;
+    }
+  });
+
+  it('rejects V5 map creation when the authoring capability is disabled', async () => {
+    const prior = process.env.MAP_V5_AUTHORING_ENABLED;
+    delete process.env.MAP_V5_AUTHORING_ENABLED;
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const denied = await app.inject({ method: 'POST', url: '/api/admin/venues', headers: { cookie, origin: 'http://localhost' }, payload: { name: 'Blocked', canvasKind: 'static' } });
+      expect(denied.statusCode).toBe(403);
+      const legacy = await app.inject({ method: 'POST', url: '/api/admin/venues', headers: { cookie, origin: 'http://localhost' }, payload: { name: 'Legacy' } });
+      expect(legacy.statusCode).toBe(201);
+      const draft = await app.inject({ method: 'GET', url: `/api/admin/venues/${legacy.json().id}/draft-v3`, headers: { cookie, origin: 'http://localhost' } });
+      expect(draft.json()).toMatchObject({ schemaVersion: 4, venueId: legacy.json().id });
+    } finally {
+      discardDb(db);
+      if (prior !== undefined) process.env.MAP_V5_AUTHORING_ENABLED = prior;
+    }
+  });
+
   it('round-trips a boundary-only draft and publishes without images or surveys', async () => {
     const { db, app } = testContext();
     try {

@@ -4,6 +4,7 @@ export function UnsavedChangesDialog({
   open,
   busy,
   saveError,
+  saveDisabled = false,
   onSave,
   onDiscard,
   onCancel,
@@ -11,6 +12,7 @@ export function UnsavedChangesDialog({
   open: boolean;
   busy: boolean;
   saveError?: string | null;
+  saveDisabled?: boolean;
   onSave: () => void;
   onDiscard: () => void;
   onCancel: () => void;
@@ -29,7 +31,7 @@ export function UnsavedChangesDialog({
           {saveError}
         </p>
       )}
-      <button ref={saveRef} type="button" onClick={onSave} disabled={busy}>
+      <button ref={saveRef} type="button" onClick={onSave} disabled={busy || saveDisabled}>
         Save changes
       </button>
       <button type="button" onClick={onDiscard} disabled={busy}>

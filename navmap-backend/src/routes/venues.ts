@@ -12,6 +12,7 @@ import { normalizeVenueId } from '../venue-id.js';
 import { z } from 'zod';
 
 const nameBody = z.object({ name: z.unknown() }).strict();
+const createBody = z.object({ name: z.unknown(), canvasKind: z.enum(['geographic', 'static']).optional() }).strict();
 
 /** Pass structured revision-conflict fields through JSON error responses. */
 function conflictFields(err: unknown): {
@@ -32,9 +33,10 @@ function conflictFields(err: unknown): {
 export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts: { dataDir: string }): void {
   app.get('/api/admin/venues', async () => listVenues(db));
   app.post('/api/admin/venues', async (req, reply) => {
-    const parsed = nameBody.safeParse(req.body ?? {});
+    const parsed = createBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid venue name' });
-    try { return reply.code(201).send(createVenue(db, parsed.data.name as string)); }
+    if (parsed.data.canvasKind && !isV5AuthoringEnabled()) return reply.code(403).send({ error: 'V5 map authoring is disabled on this server (MAP_V5_AUTHORING_ENABLED)' });
+    try { return reply.code(201).send(createVenue(db, parsed.data.name as string, parsed.data.canvasKind ?? 'v4')); }
     catch (err) { return reply.code((err as { statusCode?: number }).statusCode ?? 400).send({ error: (err as Error).message }); }
   });
   app.patch('/api/admin/venues/:venueId', async (req, reply) => {

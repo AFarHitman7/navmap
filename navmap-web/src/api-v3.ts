@@ -148,6 +148,32 @@ export async function publishV3(venueId = 'demo'): Promise<{ manifest: ManifestV
 
 export type Capabilities = { mapV5AuthoringEnabled: boolean };
 
+export type VenueSummary = { id: string; name: string; latestVersion: number };
+
+export async function listMaps(signal?: AbortSignal): Promise<VenueSummary[]> {
+  const res = await fetch('/api/admin/venues', { signal });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  if (!Array.isArray(body) || !body.every((item) => item && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.latestVersion === 'number')) {
+    throw new Error('Server returned an invalid map list');
+  }
+  return body as VenueSummary[];
+}
+
+export async function createMap(name: string, kind: 'geographic' | 'static'): Promise<VenueSummary> {
+  const res = await fetch('/api/admin/venues', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, canvasKind: kind }) });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  return body as VenueSummary;
+}
+
+export async function renameMap(id: string, name: string): Promise<VenueSummary> {
+  const res = await fetch(`/api/admin/venues/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  return body as VenueSummary;
+}
+
 /** Reader-first rollout gate: V5 authoring stays disabled until the server (and docs) say otherwise. */
 export async function getCapabilities(signal?: AbortSignal): Promise<Capabilities> {
   const res = await fetch('/api/capabilities', { signal });
@@ -180,6 +206,16 @@ export async function getDraftV5(venueId = 'demo'): Promise<MapDraft> {
   const draft = parseMapDraft(body);
   if (draft.venueId !== venueId) throw new Error('Server returned the wrong map');
   return draft;
+}
+
+export async function getDraftVersion(venueId = 'demo'): Promise<4 | 5> {
+  const res = await fetch(`${venuePath(venueId)}/draft-v3`);
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  if (!body || typeof body !== 'object') throw new Error('Server returned an invalid map');
+  const version = (body as { schemaVersion?: unknown }).schemaVersion;
+  if (version !== 4 && version !== 5) throw new Error('Server returned an unsupported map version');
+  return version;
 }
 
 /** Explicit V5 save: gated on the capability flag; never rewrites V4 publications. */
