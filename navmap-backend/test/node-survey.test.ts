@@ -175,10 +175,10 @@ describe('node surveys', () => {
     try {
       const { cookie } = await login(app);
       const put = (payload: Record<string, unknown>) =>
-        app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload });
+        app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload });
       const sample = (scans: Record<string, unknown>[]) =>
-        app.inject({ method: 'POST', url: '/api/admin/venues/demo/node-samples', headers: { cookie }, payload: { nodeId: 'n1', scans } });
-      const publish = () => app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+        app.inject({ method: 'POST', url: '/api/admin/venues/demo/node-samples', headers: { cookie, origin: 'http://localhost' }, payload: { nodeId: 'n1', scans } });
+      const publish = () => app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie, origin: 'http://localhost' } });
 
       expect((await put({ ...DRAFT, aps: [...DRAFT.aps] })).statusCode).toBe(200);
       expect((await sample(scans())).statusCode).toBe(200);

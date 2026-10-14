@@ -28,25 +28,35 @@ export function registerAdminRoutes(
     const { token, viaCookie } = extractToken(req.headers.cookie, req.headers.authorization);
     if (!checkSession(db, token)) return reply.code(401).send({ error: 'login required' });
     // Foreign-origin protection covers every cookie-authenticated write,
-    // regardless of content type (JSON, multipart, or otherwise): a browser
-    // holding the session cookie must present a same-origin Origin header.
+    // regardless of content type. Non-browser callers should use bearer auth;
+    // cookie writes require an Origin or (when Origin is absent) same-origin
+    // Referer, validated against the request's actual scheme and Host.
     if (viaCookie && ['PUT', 'POST', 'PATCH', 'DELETE'].includes(req.method)) {
       const origin = req.headers.origin;
       const host = req.headers.host;
-      const forwarded = req.headers['x-forwarded-host'];
-      const forwardedHost = (Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0])?.trim();
-      if (origin && host) {
-        try {
-          const originHost = new URL(origin).host;
-          if (!new Set([host, forwardedHost].filter(Boolean)).has(originHost)) {
-            return reply.code(403).send({ error: 'cross-origin write rejected' });
-          }
-        } catch {
-          return reply.code(403).send({ error: 'invalid origin' });
-        }
+      const candidate = origin ?? req.headers.referer;
+      if (!host || !candidate || !isSameRequestOrigin(candidate, req.protocol, host, origin !== undefined)) {
+        return reply.code(403).send({ error: 'cross-origin write rejected' });
       }
     }
   });
 
   registerVenueRoutes(app, db, { dataDir: opts.dataDir });
+}
+
+function isSameRequestOrigin(reference: string, protocol: string, host: string, originHeader: boolean): boolean {
+  try {
+    const url = new URL(reference);
+    const requestOrigin = new URL(`${protocol}://${host}`).origin;
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.origin !== requestOrigin
+    ) return false;
+    // Origin is serialized as a bare origin, unlike Referer which includes a path.
+    return !originHeader || (url.pathname === '/' && url.search === '' && url.hash === '');
+  } catch {
+    return false;
+  }
 }

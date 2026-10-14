@@ -89,7 +89,10 @@ export async function canonicalizeLayoutPng(
 ): Promise<{ bytes: Buffer; width: number; height: number }> {
   const timeoutMs = opts.timeoutMs ?? LAYOUT_PROCESS_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
-  if (opts.signal?.aborted) throw httpError(400, 'layout processing cancelled');
+  const checkCancelled = (): void => {
+    if (opts.signal?.aborted) throw httpError(400, 'layout processing cancelled');
+  };
+  checkCancelled();
   if (source.length > LAYOUT_SOURCE_MAX_BYTES) {
     throw httpError(413, 'layout image exceeds the 20 MiB source limit');
   }
@@ -151,6 +154,7 @@ export async function canonicalizeLayoutPng(
     if ((err as { statusCode?: number }).statusCode) throw err;
     throw httpError(400, 'unsupported layout image');
   }
+  checkCancelled();
   if (
     metadata.format !== 'png' ||
     !metadata.width ||
@@ -172,6 +176,7 @@ export async function canonicalizeLayoutPng(
     if ((err as { statusCode?: number }).statusCode) throw err;
     throw httpError(400, 'unsupported layout image');
   }
+  checkCancelled();
   // Authoritative geometry comes from re-reading the stored canonical bytes.
   let stored: Metadata;
   try {
@@ -182,6 +187,7 @@ export async function canonicalizeLayoutPng(
   } catch {
     throw httpError(400, 'unsupported layout image');
   }
+  checkCancelled();
   if (stored.format !== 'png' || stored.width !== metadata.width || stored.height !== metadata.height) {
     throw httpError(400, 'unsupported layout image');
   }
@@ -239,6 +245,7 @@ export async function storeLayoutPng(
         throw httpError(413, 'venue layout asset quota exceeded');
       }
     }
+    if (opts.signal?.aborted) throw httpError(400, 'layout processing cancelled');
     ensureAssetFile(dataDir, venueId, sha256, canonical);
     if (existing) {
       return {

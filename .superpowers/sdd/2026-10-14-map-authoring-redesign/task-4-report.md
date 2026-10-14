@@ -36,3 +36,12 @@ Other relevant skills available to later stages: `systematic-debugging`, `reques
 
 - A multi-process deployment sharing the same SQLite DB/filesystem needs the separately documented database-backed serialization/locking strategy; this task's synchronous quota/write section only serializes within one Node process.
 - `npm audit` artifacts in the SDD directory predate this task and were not regenerated or used to force dependency upgrades.
+
+## Review round 1 fixes
+
+Addressed both Important findings in `artifacts/task-4-review.md`:
+
+- Cookie-authenticated mutations now require a present, valid, scheme-and-authority same-origin `Origin`; if Origin is absent, a valid same-origin `Referer` is accepted. Missing Host, missing Referer, `Origin: null`, malformed, credentialed, foreign, or mismatched values fail closed. The comparison does not trust arbitrary `x-forwarded-host`. Bearer-token mutation requests remain exempt. Existing authenticated API test requests now carry a legitimate `http://localhost` Origin; the upload fixture uses its explicit `http://test.local` origin. Added missing/invalid Origin, Referer fallback, and bearer-write cases.
+- Upload lifecycle listeners (`IncomingMessage.aborted`, premature `ServerResponse.close`, and socket close) are installed before body parsing and retained through Sharp processing. Normal request-body `close` is not observed as an abort. All listeners are removed in `finally` on every route path. Cancellation checks after each Sharp stage and immediately before file/registry mutation prevent a close racing with a completed pipeline from storing bytes.
+- Added an API-level real HTTP test that sends a high-entropy PNG multipart body, disconnects while processing, then verifies both zero registry rows and no venue asset directory/files. The first RED run reproduced both review findings (missing Origin accepted; disconnect still left one DB row). After lifecycle handling, that test exposed a late-abort race where storage completed despite the signal; adding cancellation checks at the commit boundary closed that gap.
+- Review-fix verification: `npm test -- test/layout-assets.test.ts` — 16 passed; full backend suite — 105 passed; `npm run typecheck`, `npm run build`, and `git diff --check` passed.

@@ -116,13 +116,13 @@ describe('drafts_v3 store', () => {
     const { db, app } = testContext();
     try {
       const { cookie } = await login(app);
-      const first = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: V4_DRAFT });
+      const first = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: V4_DRAFT });
       expect(first.statusCode).toBe(200);
-      const conflict = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: moved(1) });
+      const conflict = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: moved(1) });
       expect(conflict.statusCode).toBe(409);
       expect(conflict.json()).toMatchObject({ code: 'revision_conflict', nodeIds: ['n1'], currentRevisions: { n1: 1 } });
       expect(typeof (conflict.json() as { error: unknown }).error).toBe('string');
-      const get = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3', headers: { cookie } });
+      const get = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' } });
       expect(get.json().nodes[0]).toMatchObject({ lat: 13.05, fingerprintRevision: 1 });
     } finally {
       discardDb(db);
@@ -140,7 +140,7 @@ describe('V5 frame revision conflicts', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const put = (payload: Record<string, unknown>) =>
-          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload });
+          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload });
         expect((await put({ ...staticDraft(), venueId: 'demo' })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const base = staticDraft();
@@ -170,7 +170,7 @@ describe('V5 frame revision conflicts', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const put = (payload: Record<string, unknown>) =>
-          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload });
+          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload });
         expect((await put({ ...staticDraft(), venueId: 'demo' })).statusCode).toBe(200);
         const base = staticDraft();
         const calibrated = {
@@ -193,7 +193,7 @@ describe('V5 frame revision conflicts', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const put = (payload: Record<string, unknown>) =>
-          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload });
+          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload });
         expect((await put({ ...staticDraft(), venueId: 'demo' })).statusCode).toBe(200);
         const base = staticDraft();
         const renamed = {
@@ -226,7 +226,7 @@ describe('V5 frame revision conflicts', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const put = (payload: Record<string, unknown>) =>
-          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload });
+          app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload });
         expect((await put({ ...geographicDraft(), venueId: 'demo' })).statusCode).toBe(200);
         const base = geographicDraft();
         const moved = {

@@ -18,22 +18,36 @@ export function registerLayoutAssetRoutes(
 ): void {
   app.post('/api/admin/venues/:venueId/layout-assets', async (req, reply) => {
     const { venueId } = req.params as { venueId: string };
+    // Observe aborts from before multipart parsing through native processing.
+    // IncomingMessage `close` is intentionally not used: it also fires on a
+    // normal completed request body, before processing begins.
+    const controller = new AbortController();
+    const onRequestAborted = (): void => controller.abort();
+    const onResponseClose = (): void => {
+      if (!reply.raw.writableEnded) controller.abort();
+    };
+    const onSocketClose = (): void => {
+      if (!reply.raw.writableEnded) controller.abort();
+    };
+    req.raw.on('aborted', onRequestAborted);
+    reply.raw.on('close', onResponseClose);
+    req.raw.socket.on('close', onSocketClose);
     try {
-      normalizeVenueId(venueId);
-      ensureVenue(db, venueId);
-    } catch (err) {
-      return sendMappedError(reply, err);
-    }
-    if (typeof (req as { isMultipart?: () => boolean }).isMultipart === 'function') {
-      if (!(req as { isMultipart: () => boolean }).isMultipart()) {
-        return reply.code(400).send({ error: 'layout upload must be multipart with one PNG file' });
+      try {
+        normalizeVenueId(venueId);
+        ensureVenue(db, venueId);
+      } catch (err) {
+        return sendMappedError(reply, err);
       }
-    }
-    // NOTE: each file stream must be consumed inside the iteration —
-    // busboy holds the parse until the current part is fully read, so
-    // deferring toBuffer() until after the loop deadlocks iteration.
-    let bytes: Buffer | undefined;
-    try {
+      if (typeof (req as { isMultipart?: () => boolean }).isMultipart === 'function') {
+        if (!(req as { isMultipart: () => boolean }).isMultipart()) {
+          return reply.code(400).send({ error: 'layout upload must be multipart with one PNG file' });
+        }
+      }
+      // NOTE: each file stream must be consumed inside the iteration —
+      // busboy holds the parse until the current part is fully read, so
+      // deferring toBuffer() until after the loop deadlocks iteration.
+      let bytes: Buffer | undefined;
       for await (const part of req.parts()) {
         if (!(part as Partial<MultipartFile>).file) {
           return reply.code(400).send({ error: 'layout upload accepts a single PNG file' });
@@ -46,29 +60,19 @@ export function registerLayoutAssetRoutes(
         }
         bytes = await file.toBuffer();
       }
-    } catch (err) {
-      return sendMappedError(reply, err);
-    }
-    if (!bytes) return reply.code(400).send({ error: 'a PNG file is required' });
-    if (bytes.length > LAYOUT_SOURCE_MAX_BYTES) {
-      return reply.code(413).send({ error: 'layout image exceeds the 20 MiB source limit' });
-    }
-    // Cancel native processing (and release its resources) on disconnect.
-    const controller = new AbortController();
-    let settled = false;
-    const onClose = (): void => {
-      if (!settled) controller.abort();
-    };
-    req.raw.on('close', onClose);
-    try {
+      if (!bytes) return reply.code(400).send({ error: 'a PNG file is required' });
+      if (bytes.length > LAYOUT_SOURCE_MAX_BYTES) {
+        return reply.code(413).send({ error: 'layout image exceeds the 20 MiB source limit' });
+      }
       const asset = await storeLayoutPng(db, opts.dataDir, venueId, bytes, { signal: controller.signal });
-      settled = true;
       return asset;
     } catch (err) {
-      settled = true;
+      if (controller.signal.aborted) return;
       return sendMappedError(reply, err);
     } finally {
-      req.raw.off('close', onClose);
+      req.raw.off('aborted', onRequestAborted);
+      reply.raw.off('close', onResponseClose);
+      req.raw.socket.off('close', onSocketClose);
     }
   });
 

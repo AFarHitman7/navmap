@@ -1,6 +1,9 @@
 // Task 4 RED: secure venue-scoped layout assets (multipart PNG upload,
 // draft asset reads, manifest-scoped public asset reads).
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import fs from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { canonicalizeLayoutPng, LAYOUT_VENUE_QUOTA_BYTES, storeLayoutPng } from '../src/layout-assets.js';
@@ -34,14 +37,15 @@ async function uploadPng(
   cookie: string,
   venueId: string,
   data: Buffer,
-  opts: { filename?: string; contentType?: string; origin?: string } = {},
+  opts: { filename?: string; contentType?: string; origin?: string | null } = {},
 ) {
   const boundary = '----task4boundary';
   const payload = multipartBody(boundary, [
     { name: 'file', filename: opts.filename ?? 'layout.png', contentType: opts.contentType ?? 'image/png', data },
   ]);
-  const headers: Record<string, string> = uploadHeaders(cookie, boundary);
-  if (opts.origin) headers.origin = opts.origin;
+  const headers: Record<string, string> = uploadHeaders(cookie, boundary, { origin: 'http://test.local' });
+  if (opts.origin === null) delete headers.origin;
+  else if (opts.origin) headers.origin = opts.origin;
   return app.inject({ method: 'POST', url: `/api/admin/venues/${venueId}/layout-assets`, headers, payload });
 }
 
@@ -78,6 +82,79 @@ describe('layout assets', () => {
     }
   });
 
+  it('requires a valid same-origin Origin or Referer for cookie writes but allows bearer writes', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie, token } = await login(app);
+      expect((await uploadPng(app, cookie, 'demo', PNG_1X1, { origin: null })).statusCode).toBe(403);
+      expect((await uploadPng(app, cookie, 'demo', PNG_1X1, { origin: 'null' })).statusCode).toBe(403);
+      expect((await uploadPng(app, cookie, 'demo', PNG_1X1, { origin: 'not a URL' })).statusCode).toBe(403);
+
+      const boundary = '----task4referer';
+      const body = multipartBody(boundary, [{ name: 'file', filename: 'layout.png', contentType: 'image/png', data: PNG_1X1 }]);
+      const fallback = await app.inject({
+        method: 'POST',
+        url: '/api/admin/venues/demo/layout-assets',
+        headers: uploadHeaders(cookie, boundary, { referer: 'http://test.local/admin/maps' }),
+        payload: body,
+      });
+      expect(fallback.statusCode).toBe(200);
+
+      const bearer = await app.inject({
+        method: 'POST',
+        url: '/api/admin/venues/demo/layout-assets',
+        headers: uploadHeaders('', boundary, { authorization: `Bearer ${token}` }),
+        payload: body,
+      });
+      expect(bearer.statusCode).toBe(200);
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('aborts processing on a client disconnect after upload body completion', async () => {
+    const { db, app, dataDir } = testContext();
+    try {
+      const { cookie } = await login(app);
+      // High-entropy but sub-20-MiB PNG keeps native decode/re-encode busy
+      // long enough to disconnect after the complete multipart body is sent.
+      const raw = randomBytes(1600 * 1600 * 3);
+      const png = await sharp(raw, { raw: { width: 1600, height: 1600, channels: 3 } }).png().toBuffer();
+      const boundary = '----task4disconnect';
+      const body = multipartBody(boundary, [{ name: 'file', filename: 'layout.png', contentType: 'image/png', data: png }]);
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      try {
+        const port = (app.server.address() as { port: number }).port;
+        await new Promise<void>((resolve, reject) => {
+          const request = http.request({
+            method: 'POST',
+            host: '127.0.0.1',
+            port,
+            path: '/api/admin/venues/demo/layout-assets',
+            headers: {
+              cookie,
+              origin: `http://127.0.0.1:${port}`,
+              'content-type': `multipart/form-data; boundary=${boundary}`,
+              'content-length': body.length,
+            },
+          }, () => reject(new Error('upload unexpectedly completed before disconnect')));
+          request.on('error', (error) => {
+            if ((error as NodeJS.ErrnoException).code === 'ECONNRESET') resolve();
+            else reject(error);
+          });
+          request.end(body, () => setTimeout(() => request.destroy(), 10));
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect((db.prepare('SELECT COUNT(*) AS count FROM layout_assets WHERE venue_id = ?').get('demo') as { count: number }).count).toBe(0);
+        expect(fs.existsSync(path.join(dataDir, 'layout-assets', 'demo'))).toBe(false);
+      } finally {
+        await app.close();
+      }
+    } finally {
+      discardDb(db);
+    }
+  });
+
   it('stores a valid PNG and serves identical draft bytes with private cache headers', async () => {
     const { db, app, dataDir } = testContext();
     try {
@@ -94,7 +171,7 @@ describe('layout assets', () => {
       const get = await app.inject({
         method: 'GET',
         url: `/api/admin/venues/demo/layout-assets/${body.assetId}`,
-        headers: { cookie },
+        headers: { cookie, origin: 'http://localhost' },
       });
       expect(get.statusCode).toBe(200);
       expect(get.headers['content-type']).toContain('image/png');
@@ -106,7 +183,7 @@ describe('layout assets', () => {
       try {
         const port = (app.server.address() as { port: number }).port;
         const http = await fetch(`http://127.0.0.1:${port}/api/admin/venues/demo/layout-assets/${body.assetId}`, {
-          headers: { cookie },
+          headers: { cookie, origin: 'http://localhost' },
         });
         expect(http.status).toBe(200);
         const served = Buffer.from(await http.arrayBuffer());
@@ -242,15 +319,15 @@ describe('layout assets', () => {
     const { db, app } = testContext();
     try {
       const { cookie } = await login(app);
-      const created = await app.inject({ method: 'POST', url: '/api/admin/venues', headers: { cookie }, payload: { name: 'Other' } });
+      const created = await app.inject({ method: 'POST', url: '/api/admin/venues', headers: { cookie, origin: 'http://localhost' }, payload: { name: 'Other' } });
       const otherId = (created.json() as { id: string }).id;
       const otherPng = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: 5, g: 5, b: 5 } } }).png().toBuffer();
       const other = await uploadPng(app, cookie, otherId, otherPng);
       expect(other.statusCode).toBe(200);
       const foreignId = (other.json() as { assetId: string }).assetId;
-      expect((await app.inject({ method: 'GET', url: `/api/admin/venues/demo/layout-assets/${foreignId}`, headers: { cookie } })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'GET', url: `/api/admin/venues/demo/layout-assets/${foreignId}`, headers: { cookie, origin: 'http://localhost' } })).statusCode).toBe(404);
       expect((await uploadPng(app, cookie, 'no-such-venue', PNG_1X1)).statusCode).toBe(404);
-      expect((await app.inject({ method: 'GET', url: '/api/admin/venues/demo/layout-assets/..%2F..%2Fetc%2Fpasswd', headers: { cookie } })).statusCode).toBe(404);
+      expect((await app.inject({ method: 'GET', url: '/api/admin/venues/demo/layout-assets/..%2F..%2Fetc%2Fpasswd', headers: { cookie, origin: 'http://localhost' } })).statusCode).toBe(404);
     } finally {
       discardDb(db);
     }

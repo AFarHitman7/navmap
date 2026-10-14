@@ -34,7 +34,7 @@ describe('V3-only API', () => {
       const v3 = await app.inject({
         method: 'GET',
         url: '/api/admin/venues/demo/draft-v3',
-        headers: { cookie },
+        headers: { cookie, origin: 'http://localhost' },
       });
       expect(v3.statusCode).toBe(200);
       expect(v3.json()).toMatchObject({ schemaVersion: 4, venueId: 'demo', indoorZones: [], nodes: [] });
@@ -42,7 +42,7 @@ describe('V3-only API', () => {
       const wrongSchema = await app.inject({
         method: 'PUT',
         url: '/api/admin/venues/demo/draft-v3',
-        headers: { cookie },
+        headers: { cookie, origin: 'http://localhost' },
         payload: { schemaVersion: 2, venueId: 'demo' },
       });
       expect(wrongSchema.statusCode).toBe(400);
@@ -50,10 +50,10 @@ describe('V3-only API', () => {
       const legacy = await app.inject({
         method: 'GET',
         url: '/api/admin/draft',
-        headers: { cookie },
+        headers: { cookie, origin: 'http://localhost' },
       });
       expect(legacy.statusCode).toBe(404);
-      const legacyPublish = await app.inject({ method: 'POST', url: '/api/admin/publish', headers: { cookie } });
+      const legacyPublish = await app.inject({ method: 'POST', url: '/api/admin/publish', headers: { cookie, origin: 'http://localhost' } });
       expect(legacyPublish.statusCode).toBe(404);
 
       const schemaRows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;

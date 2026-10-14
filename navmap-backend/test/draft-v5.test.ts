@@ -43,7 +43,7 @@ describe('v5 persistence', () => {
         const put = await app.inject({
           method: 'PUT',
           url: '/api/admin/venues/demo/draft-v3',
-          headers: { cookie },
+          headers: { cookie, origin: 'http://localhost' },
           payload: { ...geographicDraft(), venueId: 'demo' },
         });
         expect(put.statusCode).toBe(403);
@@ -62,12 +62,12 @@ describe('v5 persistence', () => {
         const put = await app.inject({
           method: 'PUT',
           url: '/api/admin/venues/demo/draft-v3',
-          headers: { cookie },
+          headers: { cookie, origin: 'http://localhost' },
           payload: { ...geographicDraft(), venueId: 'demo' },
         });
         expect(put.statusCode).toBe(200);
         expect(put.json()).toMatchObject({ schemaVersion: 5, canvas: { kind: 'geographic' } });
-        const get = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3', headers: { cookie } });
+        const get = await app.inject({ method: 'GET', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' } });
         expect(get.statusCode).toBe(200);
         expect(get.json()).toMatchObject({ schemaVersion: 5, venueId: 'demo' });
       });
@@ -86,7 +86,7 @@ describe('v5 persistence', () => {
         const put = await app.inject({
           method: 'PUT',
           url: '/api/admin/venues/demo/draft-v3',
-          headers: { cookie },
+          headers: { cookie, origin: 'http://localhost' },
           payload: badFrame,
         });
         expect(put.statusCode).toBe(400);
@@ -108,7 +108,7 @@ describe('v5 persistence', () => {
         const putStatic = await app.inject({
           method: 'PUT',
           url: '/api/admin/venues/demo/draft-v3',
-          headers: { cookie },
+          headers: { cookie, origin: 'http://localhost' },
           payload: loDraft,
         });
         expect(putStatic.statusCode).toBe(400);
@@ -123,8 +123,8 @@ describe('v5 persistence', () => {
     try {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
-        await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: { ...geographicDraft(), venueId: 'demo' } });
-        const pub = await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+        await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: { ...geographicDraft(), venueId: 'demo' } });
+        const pub = await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie, origin: 'http://localhost' } });
         expect(pub.statusCode).toBe(200);
         expect(pub.json()).toMatchObject({
           schemaVersion: 5,
@@ -149,8 +149,8 @@ describe('v5 persistence', () => {
     try {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
-        await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: { ...staticDraft(), venueId: 'demo' } });
-        const pub = await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+        await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: { ...staticDraft(), venueId: 'demo' } });
+        const pub = await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie, origin: 'http://localhost' } });
         expect(pub.statusCode).toBe(400);
         expect((pub.json() as { error: string }).error).toMatch(/asset/i);
       });
@@ -174,8 +174,8 @@ describe('v5 persistence', () => {
         anchors: [],
         aps: [],
       };
-      await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: draft });
-      await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+      await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: draft });
+      await app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie, origin: 'http://localhost' } });
       const row = (db as DatabaseSync).prepare('SELECT manifest_json FROM versions WHERE venue_id = ? AND version = 1').get('demo') as {
         manifest_json: string;
       };
@@ -196,13 +196,13 @@ describe('v5 save-time graph/frame validation', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const valid = { ...geographicDraft(), venueId: 'demo' };
-        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: valid })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const bad = { ...geographicDraft(), venueId: 'demo' };
         const target = bad.nodes.find((n) => n.id === 'n-a0b')!;
         // Frame frame-b-a-z0 spans north 13.08; 13.09 parses but leaves the frame.
         (target.position as { kind: 'geographic'; lat: number; lng: number }).lat = 13.09;
-        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: bad });
         expect(put.statusCode).toBe(400);
         expect(put.body).toMatch(/outside its frame/);
         expect(loadDraftV3Json(db, 'demo')).toBe(before);
@@ -218,14 +218,14 @@ describe('v5 save-time graph/frame validation', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const valid = { ...geographicDraft(), venueId: 'demo' };
-        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: valid })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const bad = {
           ...geographicDraft(),
           venueId: 'demo',
           edges: [...geographicDraft().edges, { from: 'n-a0b', to: 'n-a1', kind: 'path', cost: 1, meters: 1 }],
         };
-        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: bad });
         expect(put.statusCode).toBe(400);
         expect(put.body).toMatch(/same frame/);
         expect(loadDraftV3Json(db, 'demo')).toBe(before);
@@ -241,7 +241,7 @@ describe('v5 save-time graph/frame validation', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const valid = { ...geographicDraft(), venueId: 'demo' };
-        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: valid })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const bad = {
           ...geographicDraft(),
@@ -252,7 +252,7 @@ describe('v5 save-time graph/frame validation', () => {
             { id: 'tr-stairs-same-floor', name: 'stairs n-a0 ↔ n-a0g', kind: 'stair', nodeIds: ['n-a0', 'n-a0g'] },
           ],
         };
-        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: bad });
         expect(put.statusCode).toBe(400);
         expect(put.body).toMatch(/different floors/);
         expect(loadDraftV3Json(db, 'demo')).toBe(before);
@@ -268,7 +268,7 @@ describe('v5 save-time graph/frame validation', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const valid = { ...staticDraft(), venueId: 'demo' };
-        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: valid })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const base = staticDraft();
         const bad = {
@@ -279,7 +279,7 @@ describe('v5 save-time graph/frame validation', () => {
             f.id === 'frame-b-a-z0' ? { ...f, bounds: { kind: 'local', left: 0.4, top: 0.4, right: 0.6, bottom: 0.6 } } : f,
           ),
         };
-        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: bad });
         expect(put.statusCode).toBe(400);
         expect(put.body).toMatch(/outside its frame/);
         expect(loadDraftV3Json(db, 'demo')).toBe(before);
@@ -295,14 +295,14 @@ describe('v5 save-time graph/frame validation', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const valid = { ...staticDraft(), venueId: 'demo' };
-        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: valid })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const bad = {
           ...staticDraft(),
           venueId: 'demo',
           edges: [...staticDraft().edges, { from: 's-a0b', to: 's-a1b', kind: 'path', cost: 0.01 }],
         };
-        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: bad });
         expect(put.statusCode).toBe(400);
         expect(put.body).toMatch(/same frame/);
         expect(loadDraftV3Json(db, 'demo')).toBe(before);
@@ -318,7 +318,7 @@ describe('v5 save-time graph/frame validation', () => {
       const { cookie } = await login(app);
       await withFlag('1', async () => {
         const valid = { ...staticDraft(), venueId: 'demo' };
-        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: valid })).statusCode).toBe(200);
+        expect((await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: valid })).statusCode).toBe(200);
         const before = loadDraftV3Json(db, 'demo');
         const bad = {
           ...staticDraft(),
@@ -329,7 +329,7 @@ describe('v5 save-time graph/frame validation', () => {
             { id: 'tr-indoor-entrance', name: 'entrance s-a0b ↔ s-a1', kind: 'entrance', nodeIds: ['s-a0b', 's-a1'] },
           ],
         };
-        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload: bad });
+        const put = await app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload: bad });
         expect(put.statusCode).toBe(400);
         expect(put.body).toMatch(/outdoors/);
         expect(loadDraftV3Json(db, 'demo')).toBe(before);
