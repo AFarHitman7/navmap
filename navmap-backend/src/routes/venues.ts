@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import { BSSID_RE, draftSchemaVersion, loadDraftV3Json, normalizeBssid, parseDraftV3, updateDraftV3 } from '../draft.js';
+import { BSSID_RE, changedFrameNodeIdsV5, draftSchemaVersion, enforceMonotonicRevisions, loadDraftV3Json, nodeGeometryKeyV5, normalizeBssid, parseDraftV3, recordRevisionHighWater, updateDraftV3, type RevisionNodeRef } from '../draft.js';
 import { parseMapDraft } from '../map-contract.js';
 import { isV5AuthoringEnabled } from '../env.js';
 import { validateSaveV5 } from '../validate-v3.js';
@@ -12,6 +12,22 @@ import { normalizeVenueId } from '../venue-id.js';
 import { z } from 'zod';
 
 const nameBody = z.object({ name: z.unknown() }).strict();
+
+/** Pass structured revision-conflict fields through JSON error responses. */
+function conflictFields(err: unknown): {
+  code?: 'revision_conflict';
+  nodeIds?: string[];
+  currentRevisions?: Record<string, number>;
+} {
+  const e = err as { code?: unknown; nodeIds?: unknown; currentRevisions?: unknown };
+  return {
+    ...(e.code === 'revision_conflict' ? { code: 'revision_conflict' as const } : {}),
+    ...(Array.isArray(e.nodeIds) ? { nodeIds: e.nodeIds } : {}),
+    ...(e.currentRevisions && typeof e.currentRevisions === 'object'
+      ? { currentRevisions: e.currentRevisions as Record<string, number> }
+      : {}),
+  };
+}
 
 export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts: { dataDir: string }): void {
   app.get('/api/admin/venues', async () => listVenues(db));
@@ -68,7 +84,7 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
         const status = (err as { statusCode?: number }).statusCode ?? 400;
         const issues = (err as { issues?: unknown }).issues;
         const errors = (err as { errors?: string[] }).errors;
-        return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}), ...(errors ? { errors } : {}) });
+        return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}), ...(errors ? { errors } : {}), ...conflictFields(err) });
       }
     }
     let draft;
@@ -82,7 +98,7 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 400;
       const issues = (err as { issues?: unknown }).issues;
-      return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}) });
+      return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}), ...conflictFields(err) });
     }
     return draft;
   });
@@ -100,7 +116,7 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
       return { count };
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 400;
-      return reply.code(status).send({ error: (err as Error).message });
+      return reply.code(status).send({ error: (err as Error).message, ...conflictFields(err) });
     }
   });
 
@@ -118,7 +134,9 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
 
 /**
  * Explicit V5 save: strict frame-aware parse plus save-time graph/frame
- * membership checks (static content needs assigned backgrounds). APK/SSID
+ * membership checks (static content needs assigned backgrounds), then atomic
+ * revision enforcement (background/calibration changes conservatively
+ * invalidate every node in the affected frame). APK/SSID
  * allowlist normalization mirrors the legacy path.
  */
 export function updateDraftV5(db: DatabaseSync, parsed: ReturnType<typeof parseMapDraft>): ReturnType<typeof parseMapDraft> {
@@ -131,7 +149,41 @@ export function updateDraftV5(db: DatabaseSync, parsed: ReturnType<typeof parseM
     if (!BSSID_RE.test(bssid)) throw Object.assign(new Error(`invalid BSSID: ${bssid}`), { statusCode: 400 });
   }
   const draft = { ...parsed, aps };
-  saveDraftV3Json(db, draft.venueId, JSON.stringify(draft));
-  db.prepare('INSERT INTO aps (venue_id, json) VALUES (?, ?) ON CONFLICT(venue_id) DO UPDATE SET json = excluded.json').run(draft.venueId, JSON.stringify(aps));
+  const incoming: RevisionNodeRef[] = draft.nodes.map((n) => ({
+    id: n.id,
+    fingerprintRevision: n.fingerprintRevision,
+    geometry: nodeGeometryKeyV5(n),
+  }));
+  // Atomic check-and-write, mirroring the V4 path: conflicts persist nothing.
+  db.exec('BEGIN');
+  try {
+    const storedRaw = loadDraftV3Json(db, draft.venueId);
+    let stored: RevisionNodeRef[] | null = null;
+    let frameInvalidated = new Set<string>();
+    if (storedRaw) {
+      const json = JSON.parse(storedRaw);
+      if (draftSchemaVersion(json) === 5) {
+        const prev = parseMapDraft(json);
+        stored = prev.nodes.map((n) => ({
+          id: n.id,
+          fingerprintRevision: n.fingerprintRevision,
+          geometry: nodeGeometryKeyV5(n),
+        }));
+        frameInvalidated = changedFrameNodeIdsV5(prev, draft);
+      }
+    }
+    enforceMonotonicRevisions(db, draft.venueId, incoming, stored, frameInvalidated);
+    saveDraftV3Json(db, draft.venueId, JSON.stringify(draft));
+    db.prepare('INSERT INTO aps (venue_id, json) VALUES (?, ?) ON CONFLICT(venue_id) DO UPDATE SET json = excluded.json').run(draft.venueId, JSON.stringify(aps));
+    recordRevisionHighWater(db, draft.venueId, draft.nodes);
+    db.exec('COMMIT');
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
   return parseMapDraft(draft);
 }

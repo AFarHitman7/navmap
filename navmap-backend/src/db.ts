@@ -115,6 +115,12 @@ export function initializeSchema(db: DatabaseSync): void {
       readings_json TEXT NOT NULL,
       PRIMARY KEY (venue_id, node_id, fingerprint_revision, captured_at)
     );
+    CREATE TABLE IF NOT EXISTS node_revision_highwater (
+      venue_id TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      PRIMARY KEY (venue_id, node_id)
+    );
   `);
   const venueRow = db.prepare('SELECT id FROM venues WHERE id = ?').get(DEMO_VENUE_ID) as
     | { id: string }

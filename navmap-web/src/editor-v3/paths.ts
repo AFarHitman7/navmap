@@ -931,3 +931,135 @@ function removeDrawnPathV5(draft: MapDraft, pathId: string): MapDraft {
   const nodes = draft.nodes.filter((node) => !node.generated || referenced.has(node.id));
   return parseMapDraft({ ...draft, paths: remainingPaths, edges, transitions, nodes });
 }
+
+// ---------------------------------------------------------------------------
+// V5 path-node move/rebuild (Task 3). Same-frame moves only: the moved control
+// is repositioned, neighbouring spans are resampled in frame units, and the
+// whole rebuild commits as one history transaction. Cross-frame links stay
+// explicit stairs created by the stair workflow, mirroring V4 movePathNode.
+// ---------------------------------------------------------------------------
+
+function samePositionV5(a: Position, b: Position): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'geographic' && b.kind === 'geographic') return a.lat === b.lat && a.lng === b.lng;
+  if (a.kind === 'local' && b.kind === 'local') return a.x === b.x && a.y === b.y;
+  return false;
+}
+
+function hasExternalIncidentEdgeV5(draft: WorkDraftV5, nodeId: string, previousId: string, nextId: string): boolean {
+  const adjacent = new Set([edgeKey(previousId, nodeId), edgeKey(nodeId, nextId)]);
+  return draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && !adjacent.has(edgeKey(edge.from, edge.to)));
+}
+
+function collinearV5(node: MapNode, previous: MapNode, next: MapNode): boolean {
+  if (node.position.kind === 'geographic' && previous.position.kind === 'geographic' && next.position.kind === 'geographic') {
+    const cross =
+      (previous.position.lng - node.position.lng) * (next.position.lat - node.position.lat) -
+      (previous.position.lat - node.position.lat) * (next.position.lng - node.position.lng);
+    return Math.abs(cross) <= 1e-10;
+  }
+  if (node.position.kind === 'local' && previous.position.kind === 'local' && next.position.kind === 'local') {
+    const cross =
+      (previous.position.x - node.position.x) * (next.position.y - node.position.y) -
+      (previous.position.y - node.position.y) * (next.position.x - node.position.x);
+    return Math.abs(cross) <= 1e-10;
+  }
+  return false;
+}
+
+function isStructuralPathNodeV5(draft: WorkDraftV5, path: { nodeIds: string[] }, index: number): boolean {
+  const nodeId = path.nodeIds[index]!;
+  const node = requireNodeV5(draft, nodeId);
+  if (!node.generated) return true;
+  if (draft.places.some((place) => place.nodeId === nodeId) || draft.anchors.some((anchor) => anchor.nodeId === nodeId)) return true;
+  if ((draft.paths ?? []).filter((candidate) => candidate.nodeIds.includes(nodeId)).length > 1) return true;
+  const previousId = path.nodeIds[index - 1];
+  const nextId = path.nodeIds[index + 1];
+  if (!previousId || !nextId) return true;
+  if (draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && edge.kind !== 'path')) return true;
+  if (hasExternalIncidentEdgeV5(draft, nodeId, previousId, nextId)) return true;
+  const previous = requireNodeV5(draft, previousId);
+  const next = requireNodeV5(draft, nextId);
+  return !collinearV5(node, previous, next);
+}
+
+function recoverControlsV5(draft: WorkDraftV5, path: { nodeIds: string[]; controlNodeIds?: string[] }, movedId: string): string[] {
+  const explicit = new Set((path.controlNodeIds ?? []).filter((id) => path.nodeIds.includes(id)));
+  const controls: string[] = [];
+  path.nodeIds.forEach((nodeId, index) => {
+    if (index === 0 || index === path.nodeIds.length - 1 || nodeId === movedId || explicit.has(nodeId) || isStructuralPathNodeV5(draft, path, index)) {
+      controls.push(nodeId);
+    }
+  });
+  return controls;
+}
+
+function affectedInteriorIdsV5(nodeIds: string[], controls: string[], movedId: string): Set<string> {
+  const affected = new Set<string>();
+  const movedIndex = controls.indexOf(movedId);
+  if (movedIndex < 0) return affected;
+  for (const neighbor of [controls[movedIndex - 1], controls[movedIndex + 1]]) {
+    if (!neighbor) continue;
+    const a = nodeIds.indexOf(neighbor);
+    const b = nodeIds.indexOf(movedId);
+    if (a < 0 || b < 0) continue;
+    const start = Math.min(a, b) + 1;
+    const end = Math.max(a, b);
+    for (let i = start; i < end; i++) affected.add(nodeIds[i]!);
+  }
+  return affected;
+}
+
+export function movePathNodeV5(draft: MapDraft, id: string, frameId: string, position: Position): MapDraft {
+  const paths = (draft.paths ?? []).filter((path) => path.nodeIds.includes(id));
+  if (!paths.length) throw new Error(`Node ${id} is not part of a drawn path`);
+  const node = requireNodeV5(draft, id);
+  if (frameId !== node.frameId) throw new Error('Path moves stay in the same frame; use stairs for cross-frame links.');
+  const frame = requireFrameV5(draft, frameId);
+  if (position.kind !== coordKindV5(draft)) {
+    throw new Error(`${draft.canvas.kind} canvas needs ${coordKindV5(draft)} positions`);
+  }
+  if (draft.canvas.kind === 'static' && !frame.background) {
+    throw new Error(`Frame ${frame.id} needs an assigned background before authoring`);
+  }
+  if (!containsPosition(frame, position)) throw new Error('Point is outside the frame bounds');
+  const changed = !samePositionV5(node.position, position);
+  if (paths.length > 1 && changed) {
+    throw new Error('Cannot move a shared junction; delete or redraw one of its paths first.');
+  }
+  if (!changed) return draft;
+  const path = paths[0]!;
+  const controls = recoverControlsV5(draft, path, id);
+  const affected = affectedInteriorIdsV5(path.nodeIds, controls, id);
+  const movedNode: MapNode = { ...node, position: { ...position } as MapNode['position'], fingerprintRevision: node.fingerprintRevision + 1 };
+  const updatedNodes = draft.nodes.map((n) => (n.id === id ? movedNode : n));
+
+  const stripped = removeDrawnPathV5({ ...draft, nodes: updatedNodes, paths: draft.paths }, path.id);
+  const keptNodes = new Map(stripped.nodes.map((n) => [n.id, n]));
+  const controlIds = new Set(controls);
+  for (const n of updatedNodes) {
+    if (!path.nodeIds.includes(n.id)) continue;
+    if (controlIds.has(n.id) || !affected.has(n.id)) keptNodes.set(n.id, n);
+  }
+  const byId = new Map(updatedNodes.map((n) => [n.id, n]));
+  const vertices: PathVertexV5[] = controls.map((nodeId, index) => {
+    const current = byId.get(nodeId)!;
+    // Span kind derives from frame membership: same-frame runs are ordinary
+    // path links; cross-frame spans (legacy stair paths) stay explicit stairs.
+    const previous = index === 0 ? null : byId.get(controls[index - 1]!)!;
+    const kind: 'path' | 'stairs' = previous && previous.frameId !== current.frameId ? 'stairs' : 'path';
+    return {
+      frameId: current.frameId,
+      position: { ...current.position } as Position,
+      nodeId: current.id,
+      ...(index === 0 ? {} : { incomingKind: kind }),
+    };
+  });
+
+  const rebuilt = addDrawnPathV5({ ...stripped, nodes: [...keptNodes.values()] }, vertices, path.name);
+  const newPath = rebuilt.paths!.at(-1)!;
+  return parseMapDraft({
+    ...rebuilt,
+    paths: [...rebuilt.paths!.filter((p) => p.id !== newPath.id), { ...newPath, id: path.id, controlNodeIds: controls.length >= 2 ? controls : undefined }],
+  });
+}

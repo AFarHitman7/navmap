@@ -9,6 +9,35 @@ export class PublishValidationError extends Error {
   }
 }
 
+/** Structured 409 when a save reuses a stale fingerprint revision. */
+export class RevisionConflictError extends Error {
+  readonly code = 'revision_conflict' as const;
+  readonly nodeIds: string[];
+  readonly currentRevisions: Record<string, number>;
+  constructor(message: string, nodeIds: string[], currentRevisions: Record<string, number>) {
+    super(message);
+    this.nodeIds = nodeIds;
+    this.currentRevisions = currentRevisions;
+  }
+}
+
+function throwRevisionConflictIfPresent(res: Response, body: unknown): void {
+  if (res.status !== 409 || typeof body !== 'object' || body === null) return;
+  const conflict = body as { code?: unknown; nodeIds?: unknown; currentRevisions?: unknown; error?: unknown };
+  if (conflict.code !== 'revision_conflict' || !Array.isArray(conflict.nodeIds)) return;
+  const currentRevisions: Record<string, number> = {};
+  if (conflict.currentRevisions && typeof conflict.currentRevisions === 'object') {
+    for (const [id, rev] of Object.entries(conflict.currentRevisions as Record<string, unknown>)) {
+      if (typeof rev === 'number') currentRevisions[id] = rev;
+    }
+  }
+  throw new RevisionConflictError(
+    typeof conflict.error === 'string' ? `${conflict.error} (status 409)` : `Save conflict (status 409)`,
+    conflict.nodeIds.filter((id): id is string => typeof id === 'string'),
+    currentRevisions,
+  );
+}
+
 export async function login(password: string): Promise<void> {
   const res = await fetch('/api/admin/login', {
     method: 'POST',
@@ -63,7 +92,10 @@ export async function saveDraftV3(draft: DraftV3, venueId: string = draft.venueI
     body: JSON.stringify(draft),
   });
   const body = await readJson(res);
-  if (!res.ok) throwForStatus(res, body);
+  if (!res.ok) {
+    throwRevisionConflictIfPresent(res, body);
+    throwForStatus(res, body);
+  }
   const saved = parseDraftV3(body);
   if (saved.venueId !== venueId) throw new Error('Server returned the wrong map');
   return saved;
@@ -158,7 +190,10 @@ export async function saveDraftV5(draft: MapDraft, venueId: string = draft.venue
     body: JSON.stringify(draft),
   });
   const body = await readJson(res);
-  if (!res.ok) throwForStatus(res, body);
+  if (!res.ok) {
+    throwRevisionConflictIfPresent(res, body);
+    throwForStatus(res, body);
+  }
   const saved = parseMapDraft(body);
   if (saved.venueId !== venueId) throw new Error('Server returned the wrong map');
   return saved;

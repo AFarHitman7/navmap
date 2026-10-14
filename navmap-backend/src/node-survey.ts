@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { BSSID_RE, draftSchemaVersion, loadDraftV3Json, normalizeBssid, parseDraftV3, type NodeProfileV3 } from './draft.js';
+import { BSSID_RE, draftSchemaVersion, getRevisionHighWater, loadDraftV3Json, normalizeBssid, parseDraftV3, type NodeProfileV3 } from './draft.js';
 import { parseMapDraft } from './map-contract.js';
 import { normalizeVenueId } from './venue-id.js';
 
@@ -94,6 +94,14 @@ export function addNodeSamples(
   if (scans.length > 20) throw Object.assign(new Error('at most 20 scans per request'), { statusCode: 400 });
   const node = loadDraftNodeRefs(db, venueId).get(nodeId);
   if (!node) throw Object.assign(new Error(`unknown node: ${nodeId}`), { statusCode: 400 });
+  const highWater = getRevisionHighWater(db, venueId).get(nodeId);
+  const stale = (revision: number) =>
+    Object.assign(new Error(`stale fingerprint revision: scan ${revision}, node ${node.fingerprintRevision}`), {
+      statusCode: 409,
+      code: 'revision_conflict',
+      nodeIds: [nodeId],
+      currentRevisions: { [nodeId]: Math.max(node.fingerprintRevision, highWater ?? node.fingerprintRevision) },
+    });
   const seen = new Set<number>();
   const normalized = scans.map((scan) => {
     const parsed = nodeScanSchema.parse({ ...scan, nodeId });
@@ -101,10 +109,12 @@ export function addNodeSamples(
       throw Object.assign(new Error('scan nodeId must match request nodeId'), { statusCode: 400 });
     }
     if (parsed.fingerprintRevision !== node.fingerprintRevision) {
-      throw Object.assign(
-        new Error(`stale fingerprint revision: scan ${parsed.fingerprintRevision}, node ${node.fingerprintRevision}`),
-        { statusCode: 400 },
-      );
+      throw stale(parsed.fingerprintRevision);
+    }
+    // The durable high-water mark outlives node deletion: reusing a token at
+    // or below it can never silently reactivate historical samples.
+    if (highWater !== undefined && parsed.fingerprintRevision < highWater) {
+      throw stale(parsed.fingerprintRevision);
     }
     if (seen.has(parsed.capturedAt)) {
       throw Object.assign(new Error(`duplicate capturedAt in request: ${parsed.capturedAt}`), { statusCode: 400 });

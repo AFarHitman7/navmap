@@ -3,12 +3,14 @@ import { useEffect, useRef } from 'react';
 export function UnsavedChangesDialog({
   open,
   busy,
+  saveError,
   onSave,
   onDiscard,
   onCancel,
 }: {
   open: boolean;
   busy: boolean;
+  saveError?: string | null;
   onSave: () => void;
   onDiscard: () => void;
   onCancel: () => void;
@@ -22,6 +24,11 @@ export function UnsavedChangesDialog({
     <div role="dialog" aria-modal="true" aria-label="Unsaved changes">
       <h2>Unsaved changes</h2>
       <p>Save your changes before leaving this map?</p>
+      {saveError && (
+        <p className="error" role="alert">
+          {saveError}
+        </p>
+      )}
       <button ref={saveRef} type="button" onClick={onSave} disabled={busy}>
         Save changes
       </button>

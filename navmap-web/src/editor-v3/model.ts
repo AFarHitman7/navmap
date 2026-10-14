@@ -17,7 +17,7 @@ import {
   type Position,
 } from '../map-contract';
 import { containsPosition, segmentMetrics, transitionMetrics } from '../map-geometry';
-import { connectLegacyPathNodes, isGroupedPathNode, movePathNode } from './paths';
+import { connectLegacyPathNodes, isGroupedPathNode, movePathNode, movePathNodeV5 } from './paths';
 
 export function emptyDraftV3(venueId = 'demo'): DraftV3 {
   return {
@@ -613,5 +613,76 @@ export function addPlaceToNodeV5(draft: MapDraft, nodeId: string, name: string):
   return parseMapDraft({
     ...draft,
     places: [...draft.places, { id: nextPlaceIdV5(draft), name: clean, zoneId: node.zoneId, nodeId }],
+  });
+}
+
+/** Rename a V5 node. Names never invalidate fingerprint revisions. */
+export function renameNodeV5(draft: MapDraft, id: string, name: string): MapDraft {
+  requireNodeV5(draft, id);
+  const clean = name.trim();
+  if (!clean) throw new Error('Node name is required');
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.id === id ? { ...n, name: clean } : n)),
+  });
+}
+
+/** Toggle visitor visibility. Visibility never invalidates fingerprint revisions. */
+export function setNodeVisibilityV5(draft: MapDraft, id: string, visitorVisible: boolean): MapDraft {
+  requireNodeV5(draft, id);
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.id === id ? { ...n, visitorVisible } : n)),
+  });
+}
+
+function samePositionV5(a: Position, b: Position): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'geographic' && b.kind === 'geographic') return a.lat === b.lat && a.lng === b.lng;
+  if (a.kind === 'local' && b.kind === 'local') return a.x === b.x && a.y === b.y;
+  return false;
+}
+
+function groupedEdgeKeysV5(draft: MapDraft): Set<string> {
+  const key = (a: string, b: string) => (a < b ? `${a} ${b}` : `${b} ${a}`);
+  return new Set((draft.paths ?? []).flatMap((path) => path.nodeIds.slice(1).map((id, i) => key(path.nodeIds[i]!, id))));
+}
+
+function hasIncidentConnectionV5(draft: MapDraft, id: string): boolean {
+  const grouped = groupedEdgeKeysV5(draft);
+  const key = (a: string, b: string) => (a < b ? `${a} ${b}` : `${b} ${a}`);
+  return draft.edges.some((e) => (e.from === id || e.to === id) && !grouped.has(key(e.from, e.to)));
+}
+
+/**
+ * Move a standalone V5 node within its frame (one transaction, revision bump).
+ * Grouped path nodes rebuild through movePathNodeV5 instead.
+ */
+export function moveNodeV5(draft: MapDraft, id: string, frameId: string, position: Position): MapDraft {
+  if ((draft.paths ?? []).some((path) => path.nodeIds.includes(id))) {
+    return movePathNodeV5(draft, id, frameId, position);
+  }
+  const node = requireNodeV5(draft, id);
+  const frame = requireFrameV5(draft, frameId);
+  if (frame.id !== node.frameId) throw new Error('Moves stay in the same frame; redraw across floors instead.');
+  validatePositionInFrame(draft, frame, position);
+  if (samePositionV5(node.position, position)) return draft;
+  if (hasIncidentConnectionV5(draft, id)) throw new Error('Disconnect or delete connected edges before moving this point.');
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.id === id ? { ...n, position, fingerprintRevision: n.fingerprintRevision + 1 } : n)),
+  });
+}
+
+/**
+ * Conservatively invalidate every node in a frame (background replacement or
+ * calibration change). Callers commit the result through history as one
+ * transaction; Task 6 background assignment uses this after swapping assets.
+ */
+export function invalidateFrameNodesV5(draft: MapDraft, frameId: string): MapDraft {
+  requireFrameV5(draft, frameId);
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.frameId === frameId ? { ...n, fingerprintRevision: n.fingerprintRevision + 1 } : n)),
   });
 }

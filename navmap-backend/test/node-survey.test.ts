@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createDbForTest, discardDb } from './helpers.js';
-import { saveDraftV3Json } from '../src/draft.js';
+import { createDbForTest, discardDb, login, testContext } from './helpers.js';
+import { saveDraftV3Json, updateDraftV3 } from '../src/draft.js';
 import { addNodeSamples, buildNodeProfiles, loadNodeSamples } from '../src/node-survey.js';
 
 const DRAFT = {
@@ -64,6 +64,63 @@ describe('node surveys', () => {
       expect(() => addNodeSamples(db, 'demo', 'nope', scans())).toThrow(/unknown node/);
       const stale = scans().map((s) => ({ ...s, fingerprintRevision: 0 }));
       expect(() => addNodeSamples(db, 'demo', 'n1', stale)).toThrow(/revision/);
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects reused sample revisions with a structured conflict after a geometry save', () => {
+    const db = createDbForTest();
+    try {
+      updateDraftV3(db, { ...DRAFT, aps: [...DRAFT.aps] });
+      expect(addNodeSamples(db, 'demo', 'n1', scans())).toBe(3);
+      const moved = {
+        ...DRAFT,
+        aps: [...DRAFT.aps],
+        nodes: [{ ...DRAFT.nodes[0]!, lat: 13.051, fingerprintRevision: 2 }],
+      };
+      updateDraftV3(db, moved);
+      let failure: unknown;
+      try {
+        addNodeSamples(db, 'demo', 'n1', scans());
+      } catch (err) {
+        failure = err;
+      }
+      expect(failure).toMatchObject({ statusCode: 409, code: 'revision_conflict', nodeIds: ['n1'] });
+      expect((failure as { currentRevisions: Record<string, number> }).currentRevisions).toMatchObject({ n1: 2 });
+      // Current-revision scans still work; the conflict is only about reuse.
+      const fresh = scans().map((s, i) => ({ ...s, fingerprintRevision: 2, capturedAt: 2000 + i }));
+      expect(addNodeSamples(db, 'demo', 'n1', fresh)).toBe(3);
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('never resurrects stale samples after save, geometry change, restore, and publish', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const put = (payload: Record<string, unknown>) =>
+        app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie }, payload });
+      const sample = (scans: Record<string, unknown>[]) =>
+        app.inject({ method: 'POST', url: '/api/admin/venues/demo/node-samples', headers: { cookie }, payload: { nodeId: 'n1', scans } });
+      const publish = () => app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie } });
+
+      expect((await put({ ...DRAFT, aps: [...DRAFT.aps] })).statusCode).toBe(200);
+      expect((await sample(scans())).statusCode).toBe(200);
+      expect((await publish()).json()).toMatchObject({ profiles: [{ nodeId: 'n1', fingerprintRevision: 1 }] });
+
+      // Geometry moves on: stale samples stop publishing and cannot be reused.
+      const moved = { ...DRAFT, aps: [...DRAFT.aps], nodes: [{ ...DRAFT.nodes[0]!, lat: 13.051, fingerprintRevision: 2 }] };
+      expect((await put(moved)).statusCode).toBe(200);
+      expect((await publish()).json()).toMatchObject({ profiles: [] });
+      expect((await sample(scans())).statusCode).toBe(409);
+
+      // Undoing the geometry (even with a fresh monotonic revision) does not
+      // silently reactivate the old samples.
+      const restored = { ...DRAFT, aps: [...DRAFT.aps], nodes: [{ ...DRAFT.nodes[0]!, fingerprintRevision: 3 }] };
+      expect((await put(restored)).statusCode).toBe(200);
+      expect((await publish()).json()).toMatchObject({ profiles: [] });
     } finally {
       discardDb(db);
     }
