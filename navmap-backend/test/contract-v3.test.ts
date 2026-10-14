@@ -327,6 +327,56 @@ describe('map-contract v5', () => {
     ).toThrow();
   });
 
+  it('rejects duplicate indoorZone ids and duplicate floor levels', () => {
+    const geo = geographicDraft();
+    const zone = geo.indoorZones[0]!;
+    expect(() => parseMapDraft({ ...geo, indoorZones: [zone, { ...zone, name: 'Copy' }] })).toThrow(/duplicate/);
+    expect(() =>
+      parseMapDraft({ ...geo, indoorZones: [{ ...zone, floors: [...zone.floors, { z: 0, label: 'Again' }] }] }),
+    ).toThrow(/duplicate/);
+    // Same floor levels in different zones stay valid.
+    const other = { ...zone, id: 'b-b', name: 'Building B' };
+    expect(parseMapDraft({ ...geo, indoorZones: [zone, other] }).indoorZones).toHaveLength(2);
+  });
+
+  it('upgrades separator-containing endpoint ids without transition id collisions', () => {
+    const v4 = {
+      schemaVersion: 4,
+      venueId: 'demo',
+      boundary: { north: 13.1, south: 13.0, east: 80.3, west: 80.2 },
+      indoorZones: [],
+      nodes: [
+        { id: 'a-b', name: 'AB', lat: 13.05, lng: 80.25, z: 0, zoneId: null, fingerprintRevision: 1 },
+        { id: 'c', name: 'C', lat: 13.051, lng: 80.251, z: 0, zoneId: null, fingerprintRevision: 1 },
+        { id: 'a', name: 'A', lat: 13.052, lng: 80.252, z: 0, zoneId: null, fingerprintRevision: 1 },
+        { id: 'b-c', name: 'BC', lat: 13.053, lng: 80.253, z: 0, zoneId: null, fingerprintRevision: 1 },
+      ],
+      edges: [
+        { from: 'a-b', to: 'c', meters: 7, kind: 'entrance' },
+        { from: 'a', to: 'b-c', meters: 9, kind: 'stairs' },
+      ],
+      places: [],
+      anchors: [],
+      aps: [],
+    };
+    const upgraded = upgradeV4Draft(v4);
+    expect(upgraded.transitions).toHaveLength(2);
+    expect(upgraded.transitions.map((t) => t.id).sort()).toEqual(['tr-1-ab-c', 'tr-3-a-bc']);
+    expect(upgraded.transitions).toContainEqual({
+      id: 'tr-3-a-bc',
+      name: 'entrance a-b ↔ c',
+      kind: 'entrance',
+      nodeIds: ['a-b', 'c'],
+    });
+    expect(upgraded.transitions).toContainEqual({
+      id: 'tr-1-ab-c',
+      name: 'stairs a ↔ b-c',
+      kind: 'stair',
+      nodeIds: ['a', 'b-c'],
+    });
+    expect(parseMapDraft(upgraded)).toEqual(upgraded);
+  });
+
   it('manifests require boundaries for geographic maps and backgrounds for static content frames', () => {
     const geo = geographicDraft();
     const manifest = parseMapManifest({

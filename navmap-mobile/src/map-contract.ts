@@ -350,6 +350,12 @@ function pairKey(a: string, b: string): string {
   return a < b ? `${a}␟${b}` : `${b}␟${a}`;
 }
 
+function transitionIdFor(from: string, to: string): string {
+  // Length-prefixed endpoint tuple: unambiguous for arbitrary valid IDs, so
+  // ("a-b", "c") and ("a", "b-c") encode differently and decode uniquely.
+  return `tr-${from.length}-${from}${to}`;
+}
+
 function checkRelations(doc: MapDraft, manifest: boolean): void {
   const kind = doc.canvas.kind;
   // Canvas 'static' uses local coordinates; canvas 'geographic' uses geographic ones.
@@ -368,6 +374,7 @@ function checkRelations(doc: MapDraft, manifest: boolean): void {
   for (const [ids, what] of [
     [doc.frames.map((f) => f.id), 'frame'],
     [doc.nodes.map((n) => n.id), 'node'],
+    [doc.indoorZones.map((z) => z.id), 'indoorZone'],
     [doc.transitions.map((t) => t.id), 'transition'],
     [doc.paths ? doc.paths.map((p) => p.id) : [], 'path'],
     [doc.places.map((p) => p.id), 'place'],
@@ -379,6 +386,13 @@ function checkRelations(doc: MapDraft, manifest: boolean): void {
       seen.add(id);
     }
   }
+  doc.indoorZones.forEach((zone) => {
+    const seenLevels = new Set<number>();
+    for (const floor of zone.floors) {
+      if (seenLevels.has(floor.z)) fail(`duplicate floor z ${floor.z} in indoorZone ${zone.id}`);
+      seenLevels.add(floor.z);
+    }
+  });
 
   const zoneIds = new Set(doc.indoorZones.map((z) => z.id));
   const frameById = new Map(doc.frames.map((f) => [f.id, f]));
@@ -647,7 +661,7 @@ function upgradeParsedV4(v4: DraftV3): MapDraft {
     if (edge.kind === 'path') continue;
     transitionKeys.add(pairKey(edge.from, edge.to));
     transitions.push({
-      id: `tr-${edge.from}-${edge.to}`,
+      id: transitionIdFor(edge.from, edge.to),
       name: `${edge.kind} ${edge.from} ↔ ${edge.to}`,
       kind: TRANSITION_KIND_FOR_EDGE[edge.kind],
       nodeIds: [edge.from, edge.to],

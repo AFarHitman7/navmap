@@ -245,6 +245,16 @@ function checkMapRelations(doc: DraftRaw, ctx: z.RefinementCtx, manifest: boolea
   };
   unique(doc.frames.map((f) => f.id), 'frame', 'frames');
   unique(doc.nodes.map((n) => n.id), 'node', 'nodes');
+  unique(doc.indoorZones.map((z) => z.id), 'indoorZone', 'indoorZones');
+  doc.indoorZones.forEach((zone, zi) => {
+    const seenLevels = new Set<number>();
+    zone.floors.forEach((floor, fi) => {
+      if (seenLevels.has(floor.z)) {
+        issue(`duplicate floor z ${floor.z} in indoorZone ${zone.id}`, ['indoorZones', zi, 'floors', fi, 'z']);
+      }
+      seenLevels.add(floor.z);
+    });
+  });
   unique(doc.transitions.map((t) => t.id), 'transition', 'transitions');
   if (doc.paths) unique(doc.paths.map((p) => p.id), 'path', 'paths');
   unique(doc.places.map((p) => p.id), 'place', 'places');
@@ -412,6 +422,12 @@ function pairKey(a: string, b: string): string {
   return a < b ? `${a}␟${b}` : `${b}␟${a}`;
 }
 
+function transitionIdFor(from: string, to: string): string {
+  // Length-prefixed endpoint tuple: unambiguous for arbitrary valid IDs, so
+  // ("a-b", "c") and ("a", "b-c") encode differently and decode uniquely.
+  return `tr-${from.length}-${from}${to}`;
+}
+
 type GeoBounds = { north: number; south: number; east: number; west: number };
 
 function boundsForFrame(
@@ -512,7 +528,7 @@ function upgradeParsedV4(v4: DraftV3): MapDraft {
     if (edge.kind === 'path') continue;
     transitionKeys.add(pairKey(edge.from, edge.to));
     transitions.push({
-      id: `tr-${edge.from}-${edge.to}`,
+      id: transitionIdFor(edge.from, edge.to),
       name: `${edge.kind} ${edge.from} ↔ ${edge.to}`,
       kind: TRANSITION_KIND_FOR_EDGE[edge.kind],
       nodeIds: [edge.from, edge.to],
