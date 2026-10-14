@@ -79,6 +79,7 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
         draggable: mode === 'move' && view === 'editor',
         icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
+      marker.getElement()?.setAttribute('data-node-id', node.id);
       marker.bindTooltip(node.name);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
       marker.on('dragend', () => {

@@ -320,7 +320,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
         const next = placementZone
           ? addNodeAt(draft, p.lat, p.lng, placementZone.id, validPlacementFloorZ)
           : addNodeAt(draft, p.lat, p.lng, null, 0);
-        if (commitDoc(next, 'Point added. Connect it to a neighbouring point.', 'Add point')) {
+        if (commitDoc(next, 'Point added. Draw a path to it.', 'Add point')) {
           setSelectedNodeId(next.nodes[next.nodes.length - 1]!.id);
         }
       } catch (err) {
@@ -590,7 +590,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
     <div className="editor-page">
       <div className="workspace-heading">
         <div>
-          <span className="eyebrow">V3 VENUE EDITOR</span>
+          <span className="eyebrow">LEGACY V4 COMPATIBILITY EDITOR</span>
           <h1>Map editor — {venueId}</h1>
         </div>
         <div className="workspace-actions">
@@ -710,7 +710,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                 }}
               >
                 <Icon name="link" />
-                Connect
+                Legacy connect
               </button>
               <button
                 type="button"

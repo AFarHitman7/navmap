@@ -77,6 +77,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
         draggable: view === 'editor' && mode === 'move',
         icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
+      marker.getElement()?.setAttribute('data-node-id', node.id);
       marker.bindTooltip(node.name);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
       if (view === 'editor' && mode === 'move') marker.on('dragend', () => {

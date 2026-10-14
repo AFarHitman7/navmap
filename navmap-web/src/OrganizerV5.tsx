@@ -131,6 +131,33 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
     if (!selectionExists(selection, draft)) setSelection({ kind: 'none' });
   }, [draft, selection, setSelection]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (gesture) {
+          event.preventDefault();
+          setGesture(null);
+          setTool({ kind: 'select' });
+          setStatus('Pending input discarded.');
+        }
+        return;
+      }
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z' || event.shiftKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (!gesture || busy) return;
+      event.preventDefault();
+      setGesture((current) => {
+        if (!current) return current;
+        if (current.kind === 'path') return { ...current, vertices: current.vertices.slice(0, -1) };
+        return { ...current, endpoints: current.endpoints.slice(0, -1) };
+      });
+      setStatus('Last pending point undone.');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [gesture, busy, setGesture, setTool, setStatus]);
+
   async function save(): Promise<boolean> {
     if (!enabled || busy || gesture) return false;
     setBusy(true); setStatus('Saving…');
