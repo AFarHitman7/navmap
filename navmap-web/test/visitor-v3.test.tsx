@@ -23,9 +23,51 @@ describe('public visitor map', () => {
       ? jsonResponse({ venueId: 'demo', version: 2, name: 'Harbor Hall' }) : jsonResponse(published)));
     render(<VisitorV3 />);
     expect(await screen.findByRole('heading', { name: 'Visitor map — Harbor Hall' })).toBeVisible();
-    expect(await screen.findByLabelText('Destination')).toBeVisible();
+    const destination = await screen.findByLabelText('Destination');
+    expect(destination).toBeVisible();
+    expect(destination).toHaveDisplayValue('Choose a destination');
+    expect(destination.querySelector('option[value="s-a0"]')).toHaveTextContent('Lobby');
+    expect(destination.querySelector('option[value="s-a0b"]')).toHaveTextContent('Ground corridor');
+    expect(destination.querySelector('option[value="s-a0g"]')).toBeNull();
     expect(screen.queryByText('Survey point')).not.toBeInTheDocument();
     expect(screen.queryByText(/connections/)).not.toBeInTheDocument();
+  });
+
+  it('routes through a hidden generated sample using the full graph without rendering or naming it', async () => {
+    const hiddenRoute = {
+      ...v5Fixture,
+      venueId: 'demo', version: 3, profiles: [],
+      places: [
+        { id: 'p-lobby', name: 'Lobby', nodeId: 's-a0', zoneId: 'b-a' },
+        { id: 'p-gallery', name: 'Gallery', nodeId: 's-a1', zoneId: 'b-a' },
+      ],
+      edges: [
+        { from: 's-a0', to: 's-a0b', kind: 'path', cost: 0.1, meters: 2 },
+        { from: 's-a0b', to: 's-a0g', kind: 'path', cost: 0.1, meters: 2 },
+        { from: 's-a0', to: 's-a1', kind: 'stairs', cost: 10, meters: 10 },
+        { from: 's-a0g', to: 's-a1', kind: 'stairs', cost: 0.1 },
+        ...v5Fixture.edges.filter((edge) => edge.from === 's-a1'),
+      ],
+      transitions: [...v5Fixture.transitions, { id: 'hidden-stairs', name: 'internal', kind: 'stair', nodeIds: ['s-a0g', 's-a1'] }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/latest')
+      ? jsonResponse({ venueId: 'demo', version: 3 }) : jsonResponse(hiddenRoute)));
+    const user = userEvent.setup();
+    render(<VisitorV3 />);
+    await user.selectOptions(await screen.findByLabelText('Starting point'), 's-a0');
+    await user.selectOptions(screen.getByLabelText('Destination'), 's-a1');
+    expect(screen.getByText('Walk to Building A · Ground')).toBeVisible();
+    expect(screen.getByText('Take stairs to Gallery')).toBeVisible();
+    expect(screen.getByLabelText('Starting point').querySelector('option[value="s-a0g"]')).toBeNull();
+    expect(screen.getByLabelText('Destination').querySelector('option[value="s-a0g"]')).toBeNull();
+    expect(screen.getByLabelText('Starting point')).toHaveValue('s-a0');
+    expect(screen.getByLabelText('Destination')).toHaveValue('s-a1');
+    expect(screen.getByLabelText('Destination').querySelector('option[value="s-a0g"]')).toBeNull();
+    expect(screen.getByLabelText('Starting point').querySelector('option[value="s-a0g"]')).toBeNull();
+    expect(screen.queryByText(/\d+ m/)).not.toBeInTheDocument();
+    expect(document.querySelector('[data-node-id]')).toBeNull();
+    expect(document.querySelectorAll('.v5-node-marker')).toHaveLength(2);
+    expect(document.querySelector('.leaflet-overlay-pane svg path')).toBeNull();
   });
 
   it('explains an unpublished venue and recovers after publishing without an admin request', async () => {
@@ -53,7 +95,7 @@ describe('public visitor map', () => {
     render(<VisitorV3 />);
     await user.selectOptions(await screen.findByLabelText('Starting point'), 'n-a0');
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a1');
-    expect(screen.getByText(/Take stairs · Building A · 1/)).toBeVisible();
+    expect(screen.getByText(/Take stairs to Building A level 1 landing/)).toBeVisible();
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-b0');
     expect(screen.getByRole('alert')).toHaveTextContent('No connected route');
     expect(screen.queryByText(/Take stairs/)).not.toBeInTheDocument();

@@ -55,7 +55,9 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
     if (!mapReady || !map || !group) return;
     group.clearLayers();
     const frame = document.frames.find((item) => item.id === activeFrameId);
-    if (frame?.bounds.kind === 'geographic' && fitFrameRef.current !== frame.id) {
+    if (view === 'visitor' && frame?.bounds.kind === 'geographic') {
+      map.fitBounds([[frame.bounds.south, frame.bounds.west], [frame.bounds.north, frame.bounds.east]], { animate: false });
+    } else if (frame?.bounds.kind === 'geographic' && fitFrameRef.current !== frame.id) {
       map.fitBounds([[frame.bounds.south, frame.bounds.west], [frame.bounds.north, frame.bounds.east]], { animate: false });
       fitFrameRef.current = frame.id;
     }
@@ -86,7 +88,11 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
         icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
       if (view !== 'visitor') marker.getElement()?.setAttribute('data-node-id', node.id);
-      marker.bindTooltip(node.name);
+      const visitorStart = view === 'visitor' && selection.kind === 'node' && selection.id === node.id
+        && node.generated && !node.visitorVisible;
+      const tooltip = visitorStart ? 'Known location'
+        : document.places.find((place) => place.nodeId === node.id)?.name ?? node.name;
+      marker.bindTooltip(tooltip);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
       marker.on('dragend', () => {
         const p = marker.getLatLng();

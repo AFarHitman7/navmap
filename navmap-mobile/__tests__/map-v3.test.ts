@@ -48,3 +48,13 @@ test('v3 loads OSM tiles only when online; offline keeps a plain fallback with n
   const online = buildLeafletHtml({ ...V3_INPUT, onlineTiles: true });
   expect(online).toMatch(/tile\.openstreetmap\.org/);
 });
+
+test('visitor Leaflet rendering guards every route and editor outline behind visitor mode', () => {
+  const html = buildLeafletHtml({ ...V3_INPUT, visitor: true,
+    v3: { ...V3_INPUT.v3, nodes: V3_INPUT.v3.nodes.map((node) => ({ ...node, name: 'Lobby' })) } });
+  expect(html).toContain('"visitor":true');
+  expect(html).toMatch(/if\(!d\.visitor\)for\(i=1;i<d\.path\.length;i\+\+\)/);
+  expect(html).toMatch(/if\(!d\.visitor\)L\.rectangle/);
+  expect(html).toMatch(/if\(!d\.visitor\)for\(i=0;i<v\.zones\.length;i\+\+\)/);
+  expect(html).toMatch(/if\(d\.visitor&&n\.name\)marker\.bindTooltip\(n\.name\)/);
+});

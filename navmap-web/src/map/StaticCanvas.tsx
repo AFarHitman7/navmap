@@ -47,7 +47,11 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
     if (!frame?.background) { map.setView([0, 0], 0); return; }
     const bounds: L.LatLngBoundsExpression = [[0, 0], [frame.background.height, frame.background.width]];
     L.imageOverlay(backgroundUrl(document, frame.background.assetId), bounds).addTo(group);
-    if (fitFrameRef.current !== frame.id) {
+    if (view === 'visitor') {
+      map.setMaxZoom(30);
+      map.fitBounds(bounds, { animate: false });
+      map.setMaxZoom(map.getZoom() + 4);
+    } else if (fitFrameRef.current !== frame.id) {
       map.setMaxZoom(30);
       map.fitBounds(bounds, { animate: false });
       map.setMaxZoom(map.getZoom() + 4);
@@ -81,7 +85,10 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
         icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
       if (view !== 'visitor') marker.getElement()?.setAttribute('data-node-id', node.id);
-      marker.bindTooltip(node.name);
+      const tooltip = view === 'visitor' && node.generated && !node.visitorVisible
+        ? 'Known location'
+        : document.places.find((place) => place.nodeId === node.id)?.name ?? node.name;
+      marker.bindTooltip(tooltip);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
       if (view === 'editor' && mode === 'move') marker.on('dragend', () => {
         const moved = marker.getLatLng();

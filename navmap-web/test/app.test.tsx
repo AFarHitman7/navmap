@@ -33,11 +33,15 @@ describe('V3-only app shell', () => {
     expect(await screen.findByRole('heading', { name: 'Visitor map — demo' })).toBeVisible();
     await user.selectOptions(screen.getByLabelText('Starting point'), 'n-a0');
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a1');
-    expect(await screen.findByText(/Take stairs · Building A · 1/)).toBeVisible();
-    expect(screen.getByLabelText('Visible floor — Building A')).toHaveValue('0');
-    await user.selectOptions(screen.getByLabelText('Visible floor — Building A'), '1');
+    expect(await screen.findByText(/Take stairs to Upper landing/)).toBeVisible();
+    expect(document.querySelector('.layer-current-frame')).toHaveTextContent('Building A · Ground');
+    await user.selectOptions(screen.getByLabelText('Manual floor selection'), 'frame-b-a-z1');
+    expect(document.querySelector('.layer-current-frame')).toHaveTextContent('Building A · Level 1');
     expect(document.querySelector('[data-node-id]')).toBeNull();
     expect(document.querySelector('[data-edge]')).toBeNull();
+    expect(document.querySelector('.leaflet-overlay-pane svg path')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Resume follow' }));
+    expect(document.querySelector('.layer-current-frame')).toHaveTextContent('Building A · Ground');
   });
 
 });
