@@ -21,6 +21,11 @@ async function setupStatic(page: import('@playwright/test').Page) {
   await expect(page.locator('.leaflet-image-layer')).toHaveJSProperty('naturalWidth', 1);
 }
 
+async function chooseFrame(page: import('@playwright/test').Page, name: RegExp) {
+  await page.locator('.layer-picker-popover summary').click();
+  await page.locator('.layer-picker-options').getByRole('button', { name }).click();
+}
+
 async function canvasClick(page: import('@playwright/test').Page, x: number, y: number, label = 'Static floor plan') {
   const canvas = page.getByRole('application', { name: label });
   const image = canvas.locator('.leaflet-image-layer');
@@ -88,7 +93,7 @@ test('Task 10 real static canvas workflows and focused inspectors', async ({ pag
   await page.getByRole('menuitemradio', { name: 'Stair' }).click();
   await expect(page.getByRole('heading', { name: 'Stair connection' })).toBeVisible();
   await canvasClick(page, 0.38, 0.42);
-  await page.getByRole('button', { name: /Building A · 1/ }).click();
+  await chooseFrame(page, /Building A · Level 1/);
   const inspector = page.getByRole('complementary', { name: 'Map settings' });
   await expect(inspector.getByRole('button', { name: 'Discard' })).toBeVisible();
   await inspector.getByRole('button', { name: 'Discard' }).click();
@@ -102,7 +107,7 @@ test('Task 10 real static canvas workflows and focused inspectors', async ({ pag
   await page.getByRole('menuitemradio', { name: 'Stair' }).click();
   await canvasClick(page, 0.34, 0.76);
   await expect(page.getByText('1 of 2 endpoints')).toBeVisible();
-  await page.getByRole('button', { name: /Building A · 0/ }).click();
+  await chooseFrame(page, /Building A · Ground/);
   await canvasClick(page, 0.72, 0.78);
   await expect(page.getByRole('button', { name: 'Finish Stair' })).toBeEnabled();
   await page.getByRole('button', { name: 'Finish Stair' }).click();
@@ -110,15 +115,13 @@ test('Task 10 real static canvas workflows and focused inspectors', async ({ pag
 
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Entrance' }).click();
-  const frameControls = page.locator('.v5-frame-switch');
-  await frameControls.getByRole('button', { name: /Building A · 0/ }).click();
+  await chooseFrame(page, /Building A · Ground/);
   await page.locator('[data-node-id="s-a0b"]').click();
   await expect(page.getByText('1 of 2 endpoints')).toBeVisible();
-  await expect(page.locator('.v5-frame-switch button[aria-pressed="true"]')).toContainText('Building A · 0');
+  await expect(page.locator('.layer-current-frame')).toContainText('Building A · Ground');
   await expect(page.locator('.v5-endpoint-steps')).toContainText('Indoor landing · Ground corridor · Building A · Ground');
-  const outdoorFrame = frameControls.getByRole('button', { name: /^Outdoor/ });
-  await outdoorFrame.click();
-  await expect(outdoorFrame).toHaveAttribute('aria-pressed', 'true');
+  await chooseFrame(page, /^Outdoor/);
+  await expect(page.locator('.layer-current-frame')).toHaveText('Outdoor');
   await page.locator('[data-node-id="s-out"]').click();
   await expect(page.locator('.v5-endpoint-steps')).toContainText('Outdoor landing · Outdoor point · Outdoor · Ground');
   await expect(page.getByRole('button', { name: 'Finish Entrance' })).toBeEnabled();
@@ -156,15 +159,13 @@ test('Task 10 geographic Leaflet entrance endpoints use their active frames', as
   await page.screenshot({ path: resolve(artifactDir, `geographic-initial-${viewport}.png`), fullPage: true });
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Entrance' }).click();
-  const frameControls = page.locator('.v5-frame-switch');
-  await frameControls.getByRole('button', { name: /Building A · 0/ }).click();
+  await chooseFrame(page, /Building A · Ground/);
   await page.locator('[data-node-id="n-a0b"]').click();
   await expect(page.getByText('1 of 2 endpoints')).toBeVisible();
-  await expect(page.locator('.v5-frame-switch button[aria-pressed="true"]')).toContainText('Building A · 0');
+  await expect(page.locator('.layer-current-frame')).toContainText('Building A · Ground');
   await expect(page.locator('.v5-endpoint-steps')).toContainText('Indoor landing · Ground corridor · Building A · Ground');
-  const outdoorFrame = frameControls.getByRole('button', { name: /^Outdoor/ });
-  await outdoorFrame.click();
-  await expect(outdoorFrame).toHaveAttribute('aria-pressed', 'true');
+  await chooseFrame(page, /^Outdoor/);
+  await expect(page.locator('.layer-current-frame')).toHaveText('Outdoor');
   await page.locator('[data-node-id="n-out"]').click();
   await expect(page.locator('.v5-endpoint-steps')).toContainText('Outdoor landing · Outdoor entrance · Outdoor · Ground');
   await page.getByRole('button', { name: 'Finish Entrance' }).click();

@@ -14,6 +14,7 @@ test('zone clicks preserve placement floor while layers hide other floors and pa
   await expect(page.locator('[data-node="n-a1"]')).toHaveCount(0);
   await page.getByRole('button', { name: 'Select zone Building A', exact: true }).click();
   await page.getByLabel('Placement floor', { exact: true }).selectOption('1');
+  await page.getByText('Layers', { exact: true }).click();
   await page.getByLabel('Visible floor — Building A').selectOption('1');
   await expect(page.locator('[data-node="n-a0"]')).toHaveCount(0);
   await expect(page.locator('[data-node="n-b0"]')).toHaveCount(1);
@@ -47,6 +48,9 @@ test('visitor uses the current venue publicly and switches visible floors along 
     places: [{ id: 'landing', name: 'Upper landing', nodeId: 'n-a1', zoneId: 'b-a' }],
   } }));
   await page.goto('/v/campus');
+  await page.getByText('Layers', { exact: true }).click();
+  await expect(page.getByText('Outdoor', { exact: true })).toBeVisible();
+  await expect(page.getByText('Outdoor paths', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Editor', exact: true })).toHaveAttribute('href', '/editor/campus');
   await page.getByLabel('Starting point', { exact: true }).selectOption('n-out');
   await page.getByLabel('Destination', { exact: true }).selectOption('n-a1');

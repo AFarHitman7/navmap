@@ -57,14 +57,14 @@ describe('V5 map switching and pending paths', () => {
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
     expect(screen.getByText('1 points · pending path')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Building A · 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Building A · Level 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
     expect(screen.getByRole('status')).toHaveTextContent('Pending path is on another floor. Return to that floor or discard it.');
     fireEvent.click(screen.getByRole('button', { name: 'Select', exact: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Path', exact: true }));
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Regular' }));
     expect(screen.getByRole('status')).toHaveTextContent('Pending path is on another floor. Return to that floor or discard it.');
-    fireEvent.click(screen.getByRole('button', { name: 'Building A · 0' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Building A · Ground' }));
     fireEvent.click(screen.getByRole('button', { name: 'Place test point' }));
     expect(screen.getByText('2 points · pending path')).toBeTruthy();
   });

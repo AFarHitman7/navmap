@@ -1,9 +1,10 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import L from 'leaflet';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CanvasHost } from '../src/map/CanvasHost';
 import { fromLeaflet, toLeaflet } from '../src/map/static-coordinates';
 import { staticDraft } from '../src/fixtures/map-v5';
+import { StaticCanvas } from '../src/map/StaticCanvas';
 
 describe('static canvas coordinate and lifecycle contract', () => {
   it.each([
@@ -91,4 +92,18 @@ describe('static canvas coordinate and lifecycle contract', () => {
     await waitFor(() => expect(markers).toHaveBeenCalled());
     expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
   });
+
+  it('sets static zoom four levels above each fitted frame, providing 16× magnification', async () => {
+    const zoomLimits: Array<{ limit: number; fitZoom: number }> = [];
+    const originalSetMaxZoom = L.Map.prototype.setMaxZoom;
+    vi.spyOn(L.Map.prototype, 'setMaxZoom').mockImplementation(function (this: L.Map, zoom: number) {
+      zoomLimits.push({ limit: zoom, fitZoom: this.getZoom() });
+      return originalSetMaxZoom.call(this, zoom);
+    });
+    render(<StaticCanvas document={staticDraft()} activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await screen.findByRole('application', { name: 'Static floor plan' });
+    expect(zoomLimits.at(-1)!.limit - zoomLimits.at(-1)!.fitZoom).toBe(4);
+  });
 });
+
+afterEach(() => vi.restoreAllMocks());

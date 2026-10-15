@@ -23,16 +23,21 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
   const layers = useRef<L.LayerGroup | null>(null);
   const fitFrameRef = useRef('');
   const [mapReady, setMapReady] = useState(false);
+  const [tileError, setTileError] = useState(false);
   const propsRef = useRef({ document, activeFrameId, mode, callbacks });
   useLayoutEffect(() => { propsRef.current = { document, activeFrameId, mode, callbacks }; }, [document, activeFrameId, mode, callbacks]);
   useEffect(() => {
     if (!host.current) return;
     const map = L.map(host.current, { maxZoom: 24, zoomSnap: 0.25 });
     const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' });
-    tiles.addTo(map);
+    tiles.on('tileerror', () => setTileError(true)).on('tileload', () => setTileError(false)).addTo(map);
     const group = L.layerGroup().addTo(map);
     mapRef.current = map;
     layers.current = group;
+    host.current?.setAttribute('data-max-zoom', String(map.getMaxZoom()));
+    const updateZoomAttribute = () => host.current?.setAttribute('data-zoom', String(map.getZoom()));
+    map.on('zoomend', updateZoomAttribute);
+    updateZoomAttribute();
     setMapReady(true);
     map.on('click', (event: L.LeafletMouseEvent) => {
       const now = propsRef.current;
@@ -100,5 +105,8 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
       if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });
     }
   }, [document, activeFrameId, mode, callbacks, view, mapReady, selection, showReferencePoints]);
-  return <div ref={host} className="map-canvas" role="application" aria-label="Geographic map" />;
+  return <div className="map-surface outdoor">
+    <div ref={host} className="map-canvas" role="application" aria-label="Geographic map" />
+    {tileError && <span className="map-warning">OSM tiles unavailable. Your map edits are still here.</span>}
+  </div>;
 }

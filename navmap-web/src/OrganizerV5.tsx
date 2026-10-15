@@ -6,6 +6,7 @@ import { addRegularNode, addEntrance, addStair, addRegularPath } from './editor-
 import { moveNodeV5 } from './editor-v3/model';
 import { useEditorDocument } from './editor-v3/useEditorDocument';
 import { CanvasHost } from './map/CanvasHost';
+import { LayerPicker } from './LayerPicker';
 import { useBlocker } from 'react-router-dom';
 import { UnsavedChangesDialog } from './editor/UnsavedChangesDialog';
 import { Inspector } from './editor-v3/inspectors/Inspector';
@@ -224,7 +225,7 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
     <section className="v5-editor-layout">
       <div className="v5-canvas-column">
         <div className="v5-toolbar" aria-label="Map tools">
-          <div className="v5-frame-switch" role="group" aria-label="Map frames">{draft.frames.map((candidate) => <button key={candidate.id} type="button" aria-pressed={candidate.id === activeFrameId} onClick={() => setActiveFrameId(candidate.id)}>{candidate.zoneId ? `${draft.indoorZones.find((z) => z.id === candidate.zoneId)?.name ?? 'Building'} · ${candidate.z}` : 'Outdoor'}{candidate.background ? '' : ' · no plan'}</button>)}</div>
+          <LayerPicker canvasKind={draft.canvas.kind} frames={draft.frames} zones={draft.indoorZones} activeFrameId={activeFrameId} onFrameChange={setActiveFrameId} />
           <span className="v5-tool-spacer" />
           <button type="button" aria-pressed={tool.kind === 'select'} onClick={() => chooseTool({ kind: 'select' })}>Select</button>
           <button type="button" aria-pressed={tool.kind === 'boundary'} disabled={!enabled} onClick={() => chooseTool({ kind: 'boundary' })}>Boundary</button>

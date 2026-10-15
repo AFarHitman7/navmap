@@ -25,7 +25,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
   useLayoutEffect(() => { propsRef.current = { document, activeFrameId, mode, callbacks, view }; }, [document, activeFrameId, mode, callbacks, view]);
   useEffect(() => {
     if (!host.current) return;
-    const map = L.map(host.current, { crs: L.CRS.Simple, minZoom: -4, maxZoom: 8, zoomSnap: 0.25, attributionControl: false });
+    const map = L.map(host.current, { crs: L.CRS.Simple, minZoom: -4, maxZoom: 30, zoomSnap: 0.25, attributionControl: false });
     mapRef.current = map;
     layers.current = L.layerGroup().addTo(map);
     setMapReady(true);
@@ -48,7 +48,9 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
     const bounds: L.LatLngBoundsExpression = [[0, 0], [frame.background.height, frame.background.width]];
     L.imageOverlay(backgroundUrl(document, frame.background.assetId), bounds).addTo(group);
     if (fitFrameRef.current !== frame.id) {
+      map.setMaxZoom(30);
       map.fitBounds(bounds, { animate: false });
+      map.setMaxZoom(map.getZoom() + 4);
       fitFrameRef.current = frame.id;
     }
     const projection = projectMap(document, view, selection);

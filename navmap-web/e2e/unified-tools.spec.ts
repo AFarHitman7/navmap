@@ -34,6 +34,11 @@ async function openEditor(page: import('@playwright/test').Page) {
   return { draft, savedDrafts };
 }
 
+async function chooseFrame(page: import('@playwright/test').Page, name: RegExp) {
+  await page.locator('.layer-picker-popover summary').click();
+  await page.locator('.layer-picker-options').getByRole('button', { name }).click();
+}
+
 async function clickNode(page: import('@playwright/test').Page, id: string) {
   await page.locator(`[data-node-id="${id}"]`).click();
 }
@@ -154,7 +159,7 @@ test('entrance and cross-floor stair pairs finish atomically; stair path associa
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Entrance' }).click();
   await mapClick(page, .43, .48);
-  await page.getByRole('button', { name: 'Outdoor', exact: true }).click();
+  await chooseFrame(page, /^Outdoor/);
   await mapClick(page, .48, .52);
   await page.getByRole('button', { name: 'Finish Entrance' }).click();
   await expect(page.locator('.v5-status')).toHaveText('Entrance added');
@@ -162,11 +167,10 @@ test('entrance and cross-floor stair pairs finish atomically; stair path associa
   await page.getByRole('button', { name: 'Node', exact: true }).click();
   await page.getByRole('menuitemradio', { name: 'Stair' }).click();
   await page.getByLabel('Stair name').fill('New stairs');
-  await page.locator('.v5-frame-switch').getByRole('button', { name: 'Building A · 0' }).click();
+  await chooseFrame(page, /Building A · Ground/);
   await clickNode(page, 's-stair-low');
   await expect(page.getByText('1 of 2 endpoints')).toBeVisible();
-  const frameControls = page.locator('.v5-frame-switch');
-  await frameControls.getByRole('button', { name: 'Building A · 1' }).click();
+  await chooseFrame(page, /Building A · Level 1/);
   await clickNode(page, 's-stair-high');
   await expect(page.getByRole('button', { name: 'Finish Stair' })).toBeEnabled();
   await page.getByRole('button', { name: 'Finish Stair' }).click();
