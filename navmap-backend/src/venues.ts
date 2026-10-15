@@ -15,6 +15,11 @@ function ensureVenueExists(db: DatabaseSync, venueId: string): { id: string; nam
   return row;
 }
 
+export function getVenueName(db: DatabaseSync, venueId: string): string | null {
+  const row = db.prepare('SELECT name FROM venues WHERE id = ?').get(venueId) as { name: string } | undefined;
+  return row?.name ?? null;
+}
+
 export function listVenues(db: DatabaseSync): VenueSummary[] {
   const rows = db.prepare('SELECT id, name FROM venues ORDER BY name ASC, id ASC').all() as Array<{
     id: string;

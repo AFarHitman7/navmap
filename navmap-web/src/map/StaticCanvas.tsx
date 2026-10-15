@@ -80,7 +80,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
         zIndexOffset: view === 'editor' && (mode === 'endpoints' || mode === 'draw-path') ? 1000 : 0,
         icon: L.divIcon({ className: `v5-node-marker${handle ? ' v5-path-handle' : ''}${selected ? ' is-selected' : ''}${node.generated ? ' is-reference' : ''}`, html: '<span aria-hidden="true"></span>', iconSize: [handle ? 14 : 18, handle ? 14 : 18], iconAnchor: [handle ? 7 : 9, handle ? 7 : 9] }),
       }).addTo(group);
-      marker.getElement()?.setAttribute('data-node-id', node.id);
+      if (view !== 'visitor') marker.getElement()?.setAttribute('data-node-id', node.id);
       marker.bindTooltip(node.name);
       marker.on('click', () => callbacks.onNodeClick?.(node.id));
       if (view === 'editor' && mode === 'move') marker.on('dragend', () => {
@@ -97,7 +97,7 @@ export function StaticCanvas({ document, activeFrameId, mode, callbacks, view = 
       const semanticLabel = transition.kind === 'elevator' ? 'Elevator' : transition.kind === 'entrance' ? 'Entrance' : 'Stairs';
       const label = escapeHtml(view === 'visitor' ? semanticLabel : `${semanticLabel} · ${other.zoneId ? document.indoorZones.find((zone) => zone.id === other.zoneId)?.name ?? 'Building' : 'Outdoor'} floor ${other.z}`);
       const badge = L.marker(toLeaflet(local.position, frame.background.width, frame.background.height), { interactive: view === 'editor', zIndexOffset: view === 'editor' && (mode === 'endpoints' || mode === 'draw-path') ? -1000 : 0, icon: L.divIcon({ className: 'v5-transition-badge', html: `<span>${label}</span>`, iconSize: [132, 24], iconAnchor: [0, 12] }) }).addTo(group);
-      badge.getElement()?.setAttribute('data-transition', transition.id);
+       if (view !== 'visitor') badge.getElement()?.setAttribute('data-transition', transition.id);
       if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });
     }
   }, [document, activeFrameId, mode, callbacks, view, mapReady, selection, showReferencePoints]);

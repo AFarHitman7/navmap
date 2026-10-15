@@ -20,7 +20,8 @@ describe('V3-only app shell', () => {
       if (url === '/api/admin/venues/demo/draft-v3') return jsonResponse(fixture);
       if (url === '/api/venues/demo/latest') return jsonResponse({ venueId: 'demo', version: 1 });
       if (url === '/api/venues/demo/versions/1/manifest') return jsonResponse({ ...fixture, version: 1, profiles: [],
-        places: [{ id: 'p-landing', name: 'Upper landing', nodeId: 'n-a1', zoneId: 'b-a' }] });
+        places: [{ id: 'p-lobby', name: 'Lobby', nodeId: 'n-a0', zoneId: 'b-a' },
+          { id: 'p-landing', name: 'Upper landing', nodeId: 'n-a1', zoneId: 'b-a' }] });
       return jsonResponse({}, 404);
     }));
 
@@ -30,13 +31,13 @@ describe('V3-only app shell', () => {
     expect(screen.queryByRole('link', { name: 'Maps' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('link', { name: 'Visitor' }));
     expect(await screen.findByRole('heading', { name: 'Visitor map — demo' })).toBeVisible();
-    await user.selectOptions(screen.getByLabelText('Starting point'), 'n-out');
+    await user.selectOptions(screen.getByLabelText('Starting point'), 'n-a0');
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a1');
-    expect(await screen.findByText(/Take stairs to Building A · Floor 1/)).toBeVisible();
+    expect(await screen.findByText(/Take stairs · Building A · 1/)).toBeVisible();
     expect(screen.getByLabelText('Visible floor — Building A')).toHaveValue('0');
     await user.selectOptions(screen.getByLabelText('Visible floor — Building A'), '1');
-    expect(document.querySelector('[data-node="n-a1"]')).not.toBeNull();
-    expect(document.querySelector('[data-node="n-a0"]')).toBeNull();
+    expect(document.querySelector('[data-node-id]')).toBeNull();
+    expect(document.querySelector('[data-edge]')).toBeNull();
   });
 
 });

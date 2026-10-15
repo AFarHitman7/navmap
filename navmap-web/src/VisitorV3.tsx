@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getPublishedManifestV3 } from './api-v3';
-import type { ManifestV3 } from './contract-v3';
+import { getPublishedVisitorMap } from './api-v3';
+import type { MapManifest } from './map-contract';
+import { CanvasHost } from './map/CanvasHost';
 import { LayerPicker } from './LayerPicker';
-import { MapCanvasV3 } from './MapCanvasV3';
 import { resolveFloorVisibility, type ZoneFloorVisibility } from './floor-visibility';
 import { shortestPathV3 } from './route-v3';
 
 export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
-  const [manifest, setManifest] = useState<ManifestV3 | null>(null);
+  const [manifest, setManifest] = useState<MapManifest | null>(null);
+  const [mapName, setMapName] = useState(venueId);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [start, setStart] = useState('');
@@ -18,8 +19,8 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    getPublishedManifestV3(venueId, controller.signal).then((map) => {
-      if (active) setManifest(map);
+    getPublishedVisitorMap(venueId, controller.signal).then(({ manifest: map, name }) => {
+      if (active) { setManifest(map); setMapName(name); }
     }, (err: unknown) => {
       if (!active) return;
       const detail = err instanceof Error ? err.message : 'Try loading the map again.';
@@ -30,13 +31,18 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
     return () => { active = false; controller.abort(); };
   }, [venueId, attempt]);
 
-  const visibility = useMemo(() => resolveFloorVisibility(manifest?.indoorZones ?? [], floorChoices), [manifest, floorChoices]);
-  const byId = useMemo(() => new Map(manifest?.nodes.map((node) => [node.id, node])), [manifest]);
-  const route = useMemo(() => manifest && start && destination ? shortestPathV3(manifest, start, destination) : null,
-    [manifest, start, destination]);
+  const legacyZones = useMemo(() => (manifest?.indoorZones ?? []).map((zone) => ({ ...zone,
+    bounds: zone.bounds?.kind === 'geographic' ? { north: zone.bounds.north, south: zone.bounds.south, east: zone.bounds.east, west: zone.bounds.west }
+      : { north: 1, south: 0, east: 1, west: 0 } })), [manifest]);
+  const visibility = useMemo(() => resolveFloorVisibility(legacyZones, floorChoices), [legacyZones, floorChoices]);
+  const visibleNodes = useMemo(() => manifest?.nodes.filter((node) => node.visitorVisible) ?? [], [manifest]);
+  const byId = useMemo(() => new Map(visibleNodes.map((node) => [node.id, node])), [visibleNodes]);
+  const places = useMemo(() => manifest?.places.filter((place) => byId.has(place.nodeId)) ?? [], [manifest, byId]);
+  const route = useMemo(() => manifest && start && destination && byId.has(start) && byId.has(destination)
+    ? shortestPathV3(manifest, start, destination) : null, [manifest, start, destination, byId]);
 
   if (!manifest) return <div className="page-state">
-    <h1>Visitor map — {venueId}</h1>
+    <h1>Visitor map — {mapName}</h1>
     {error ? <><p className="error" role="alert">{error}</p>
       <button onClick={() => { setError(''); setManifest(null); setAttempt((value) => value + 1); }}>Try again</button></>
       : <p role="status">Loading published map…</p>}
@@ -45,74 +51,75 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   const location = (id: string) => {
     const node = byId.get(id)!;
     const zone = manifest.indoorZones.find((item) => item.id === node.zoneId);
-    return zone ? `${zone.name} · Floor ${node.z}` : 'Outdoors';
+    return zone ? `${zone.name} · ${manifest.frames.find((frame) => frame.id === node.frameId)?.z ?? node.z}` : 'Outdoors';
   };
-  const placeNodes = new Set(manifest.places.map((place) => place.nodeId));
-  const distance = route?.slice(1).reduce((sum, id, index) => sum + Math.min(...manifest.edges
-    .filter((edge) => (edge.from === route[index] && edge.to === id) || (edge.to === route[index] && edge.from === id))
-    .map((edge) => edge.meters)), 0);
+  const edgeFor = (from: string, to: string) => manifest.edges.filter((edge) =>
+    (edge.from === from && edge.to === to) || (edge.to === from && edge.from === to))
+    .sort((a, b) => a.cost - b.cost)[0];
+  const routeEdges = route?.slice(1).map((id, index) => edgeFor(route[index]!, id));
+  const meters = route && route.length > 1 && routeEdges?.every((edge) => edge?.meters !== undefined)
+    ? routeEdges.reduce<number>((sum, edge) => sum + edge!.meters!, 0) : null;
+  const activeFrame = manifest.frames.find((frame) => frame.zoneId === null && showOutdoors)
+    ?? manifest.frames.find((frame) => frame.zoneId && visibility[frame.zoneId] === frame.z)
+    ?? manifest.frames.find((frame) => frame.zoneId && visibility[frame.zoneId] !== 'hidden') ?? manifest.frames[0];
+  const startNode = byId.get(start);
+  const canShowStartLocation = !!startNode && !startNode.generated;
 
   return <div className="visitor">
     <div className="workspace-heading"><div>
       <span className="eyebrow">PUBLISHED MAP · VERSION {manifest.version}</span>
-      <h1>Visitor map — {venueId}</h1>
-    </div><p>Choose your starting point and destination.</p></div>
+      <h1>Visitor map — {mapName}</h1>
+    </div><p>Choose a starting point and destination.</p></div>
     <div className="visitor-layout">
       <aside className="visitor-sidebar">
         <h2>Find your way</h2>
-        {manifest.nodes.length === 0 ? <p className="empty-hint">No path points are available in this published map.</p> : <>
+        {!visibleNodes.length ? <p className="empty-hint">No visitor locations are available in this published map.</p> : <>
           <label>Starting point
             <select aria-label="Starting point" value={start} onChange={(e) => setStart(e.target.value)}>
               <option value="">Choose a starting point</option>
-              {manifest.nodes.map((node) => <option key={node.id} value={node.id}>{node.name} · {location(node.id)}</option>)}
+              {places.map((place) => <option key={place.id} value={place.nodeId}>{place.name} · {location(place.nodeId)}</option>)}
             </select>
           </label>
           <label>Destination
             <select aria-label="Destination" value={destination} onChange={(e) => setDestination(e.target.value)}>
               <option value="">Choose a destination</option>
-              {manifest.places.length > 0 && <optgroup label="Places">
-                {manifest.places.map((place) => <option key={place.id} value={place.nodeId}>{place.name} · {location(place.nodeId)}</option>)}
-              </optgroup>}
-              <optgroup label="Path points">
-                {manifest.nodes.filter((node) => !placeNodes.has(node.id)).map((node) =>
-                  <option key={node.id} value={node.id}>{node.name} · {location(node.id)}</option>)}
-              </optgroup>
+              {places.map((place) => <option key={place.id} value={place.nodeId}>{place.name} · {location(place.nodeId)}</option>)}
             </select>
           </label>
         </>}
         {start && destination && <section className="route-panel" aria-label="Directions" aria-live="polite">
           <h3>Directions</h3>
-          {!route ? <p className="error" role="alert">No connected route between these points. Choose another destination.</p>
+          {!route ? <p className="error" role="alert">No connected route between these places. Choose another destination.</p>
             : route.length === 1 ? <p className="notice">You’re already at your destination.</p> : <>
-              <p className="route-summary">{Math.round(distance ?? 0)} m · {route.length - 1} connections</p>
-              <ol>{route.map((id, index) => {
+              <p className="route-summary">{meters === null ? '' : `${Math.round(meters)} m · `}{route.length - 1} steps</p>
+              <ol>{route.slice(1).map((id, index) => {
+                const edge = routeEdges![index];
                 const node = byId.get(id)!;
-                const previous = index > 0 ? byId.get(route[index - 1]) : undefined;
-                const edge = previous ? manifest.edges.filter((item) => (item.from === previous.id && item.to === id)
-                  || (item.to === previous.id && item.from === id)).sort((a, b) => a.meters - b.meters)[0] : undefined;
-                const instruction = edge?.kind === 'stairs' || edge?.kind === 'elevator'
-                  ? `Take ${edge.kind} to ${location(id)}`
-                  : `${index === 0 ? 'Start at' : index === route.length - 1 ? 'Arrive at' : 'Continue to'} ${node.name} · ${location(id)}`;
-                return <li key={id}>{instruction}
+                const place = places.find((item) => item.nodeId === id);
+                const transition = edge?.kind === 'stairs' ? 'Take stairs'
+                  : edge?.kind === 'elevator' ? 'Take elevator' : edge?.kind === 'entrance' ? 'Use the entrance' : null;
+                const instruction = transition ? `${transition} · ${location(id)}`
+                  : `${index === route.length - 2 ? 'Arrive at' : 'Continue to'} ${place?.name ?? 'your destination'} · ${location(id)}`;
+                return <li key={`${id}-${index}`}>{instruction}
                   {node.zoneId !== null && <button type="button" className="text-button"
-                    onClick={() => setFloorChoices((choices) => ({ ...choices, [node.zoneId!]: node.z }))}>
-                    Show {location(id)}
-                  </button>}
+                    onClick={() => setFloorChoices((choices) => ({ ...choices, [node.zoneId!]: node.z }))}>Show {location(id)}</button>}
                 </li>;
               })}</ol>
-              <p>Switch floors in Layers to see each part of your route.</p>
+              <p>Choose a floor in Layers to view each part of your route.</p>
             </>}
         </section>}
       </aside>
       <div className="visitor-map">
-        <LayerPicker zones={manifest.indoorZones} visibility={visibility} showOutdoors={showOutdoors}
+        <LayerPicker zones={legacyZones} visibility={visibility} showOutdoors={showOutdoors}
           onFloorChange={(id, floor) => setFloorChoices((choices) => ({ ...choices, [id]: floor }))}
           onOutdoorsChange={setShowOutdoors} />
         <div className="map-frame">
-          <MapCanvasV3 draft={manifest} selectedZoneId={null} selectedNodeId={destination}
-            zoneFloorVisibility={visibility} showOutdoors={showOutdoors} routeNodeIds={route ?? undefined}
-            onNodeClick={(id) => { if (!start) setStart(id); else setDestination(id); }} />
+          {activeFrame && <CanvasHost document={manifest} activeFrameId={activeFrame.id} mode="navigate" view="visitor"
+            callbacks={{}} selection={{ kind: 'none' }} />}
         </div>
+        {start && <div className="visitor-location" aria-label="Current location">
+          {canShowStartLocation ? `Starting from ${places.find((place) => place.nodeId === start)?.name ?? 'selected place'}` : 'Starting point selected'}
+        </div>}
       </div>
     </div>
   </div>;

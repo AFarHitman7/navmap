@@ -5,6 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { getLatestVersion } from '../db.js';
 import { draftSchemaVersion, parseManifestV3 } from '../draft.js';
 import { LAYOUT_ASSET_ID_RE, readLayoutAsset } from '../layout-assets.js';
+import { getVenueName } from '../venues.js';
 import { parseMapManifest } from '../map-contract.js';
 import { isV5AuthoringEnabled } from '../env.js';
 import { normalizeVenueId } from '../venue-id.js';
@@ -47,7 +48,7 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync, opt
     const version = getLatestVersion(db, venueId);
     if (version <= 0) return reply.code(404).send({ error: 'no published version' });
     reply.header('cache-control', 'no-store');
-    return { venueId, version };
+    return { venueId, version, name: getVenueName(db, venueId) ?? venueId };
   });
 
   app.get('/api/venues/:venueId/versions/:version/manifest', async (req, reply) => {

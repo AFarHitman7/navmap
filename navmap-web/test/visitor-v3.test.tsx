@@ -3,8 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VisitorV3 } from '../src/VisitorV3';
 import fixture from '../src/fixtures/unified-v3.json';
+import v5Fixture from '../src/fixtures/map-v5-static.json';
 
-const manifest = { ...fixture, version: 1, profiles: [] };
+const manifest = { ...fixture, venueId: 'demo', version: 1, profiles: [], places: [
+  { id: 'a0', name: 'Building A ground lobby', nodeId: 'n-a0', zoneId: 'b-a' },
+  { id: 'a1', name: 'Building A level 1 landing', nodeId: 'n-a1', zoneId: 'b-a' },
+  { id: 'b0', name: 'Building B ground lobby', nodeId: 'n-b0', zoneId: 'b-b' },
+] };
 function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(body) } as Response;
 }
@@ -12,6 +17,17 @@ function jsonResponse(body: unknown, status = 200): Response {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('public visitor map', () => {
+  it('normalizes V5 published map and only offers visitor-visible authored places', async () => {
+    const published = { ...v5Fixture, venueId: 'demo', version: 2, profiles: [] };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/latest')
+      ? jsonResponse({ venueId: 'demo', version: 2, name: 'Harbor Hall' }) : jsonResponse(published)));
+    render(<VisitorV3 />);
+    expect(await screen.findByRole('heading', { name: 'Visitor map — Harbor Hall' })).toBeVisible();
+    expect(await screen.findByLabelText('Destination')).toBeVisible();
+    expect(screen.queryByText('Survey point')).not.toBeInTheDocument();
+    expect(screen.queryByText(/connections/)).not.toBeInTheDocument();
+  });
+
   it('explains an unpublished venue and recovers after publishing without an admin request', async () => {
     const user = userEvent.setup();
     let published = false;
@@ -35,13 +51,13 @@ describe('public visitor map', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/latest')
       ? jsonResponse({ venueId: 'demo', version: 1 }) : jsonResponse(manifest)));
     render(<VisitorV3 />);
-    await user.selectOptions(await screen.findByLabelText('Starting point'), 'n-out');
+    await user.selectOptions(await screen.findByLabelText('Starting point'), 'n-a0');
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a1');
-    expect(screen.getByText(/Take stairs to Building A · Floor 1/)).toBeVisible();
+    expect(screen.getByText(/Take stairs · Building A · 1/)).toBeVisible();
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-b0');
     expect(screen.getByRole('alert')).toHaveTextContent('No connected route');
     expect(screen.queryByText(/Take stairs/)).not.toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('Destination'), 'n-out');
+    await user.selectOptions(screen.getByLabelText('Destination'), 'n-a0');
     expect(screen.getByText('You’re already at your destination.')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

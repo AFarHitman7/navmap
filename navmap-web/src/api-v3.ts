@@ -1,5 +1,6 @@
 import { parseDraftV3, parseManifestV3, type DraftV3, type ManifestV3 } from './contract-v3';
 import { parseMapDraft, parseMapManifest, type MapDraft, type MapManifest } from './map-contract';
+import { upgradeV4Manifest } from './map-contract';
 export type { LayoutAsset } from './layout-api';
 
 export class PublishValidationError extends Error {
@@ -251,6 +252,25 @@ export async function getPublishedManifestV5(venueId = 'demo', signal?: AbortSig
   const manifest = parseMapManifest(body);
   if (manifest.venueId !== venueId || manifest.version !== latest.version) throw new Error('Server returned the wrong published map');
   return manifest;
+}
+
+export async function getPublishedVisitorMap(venueId = 'demo', signal?: AbortSignal): Promise<{ manifest: MapManifest; name: string }> {
+  const path = `/api/venues/${encodeURIComponent(venueId)}`;
+  const latestResponse = await fetch(`${path}/latest`, { signal });
+  const latest = await readJson(latestResponse);
+  if (!latestResponse.ok) throwForStatus(latestResponse, latest);
+  if (!latest || typeof latest !== 'object' || !('venueId' in latest) || latest.venueId !== venueId
+    || !('version' in latest) || typeof latest.version !== 'number' || !Number.isInteger(latest.version) || latest.version <= 0) {
+    throw new Error('Server returned an invalid published version');
+  }
+  const response = await fetch(`${path}/versions/${latest.version}/manifest`, { signal });
+  const body = await readJson(response);
+  if (!response.ok) throwForStatus(response, body);
+  const raw = (body as { manifest?: unknown }).manifest ?? body;
+  const schemaVersion = (raw as { schemaVersion?: unknown })?.schemaVersion;
+  const manifest = schemaVersion === 5 ? parseMapManifest(raw) : schemaVersion === 4 ? upgradeV4Manifest(raw) : null;
+  if (!manifest || manifest.venueId !== venueId || manifest.version !== latest.version) throw new Error('Server returned the wrong published map');
+  return { manifest, name: 'name' in latest && typeof latest.name === 'string' && latest.name.trim() ? latest.name : venueId };
 }
 
 /** Explicit V5 publish: gated on the capability flag. */
