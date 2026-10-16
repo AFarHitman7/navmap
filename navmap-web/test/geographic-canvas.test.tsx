@@ -38,4 +38,19 @@ describe('GeographicCanvas presentation', () => {
     await waitFor(() => expect(markers).toHaveBeenCalled());
     expect(badges()).toHaveLength(0);
   });
+
+  it('renders explicitly placed generated nodes but excludes unplaced generated nodes', async () => {
+    const draft = geographicDraft();
+    const generated = draft.nodes.find((node) => node.id === 'n-a0g')!;
+    generated.visitorVisible = true;
+    generated.name = 'PRIVATE GENERATED NAME';
+    draft.places.push({ id: 'p-generated-visitor', name: 'Visitor stop', nodeId: generated.id, zoneId: 'b-a' });
+    const { container, rerender } = render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(container.querySelectorAll('.v5-node-marker')).toHaveLength(3));
+    expect(container.textContent).not.toContain('PRIVATE GENERATED NAME');
+    const noPlace = { ...draft, places: draft.places.filter((place) => place.nodeId !== generated.id) };
+    rerender(<CanvasHost document={noPlace} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(container.querySelectorAll('.v5-node-marker')).toHaveLength(2));
+    expect(container.textContent).not.toContain('PRIVATE GENERATED NAME');
+  });
 });

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { VisitorScreen } from '../src/VisitorScreen';
+import { MapView } from '../src/map/MapView';
 import { parseManifestV3 } from '../src/contract-v3';
 import fixture from '../src/fixtures/unified-v3.json';
 
@@ -63,9 +64,46 @@ test('visitor uses Place labels and human-readable current location', () => {
 test('QR/manual positions on hidden samples get a generic location label and no marker choice', () => {
   let renderer: ReactTestRenderer;
   act(() => { renderer = create(<VisitorScreen {...base} v3NodeId="n-a0b" />); });
-  expect(texts(renderer!.root.findByProps({ testID: 'visitor-v3-location' })).join(' ')).toBe('Current location: Building A · Ground');
+  expect(texts(renderer!.root.findByProps({ testID: 'visitor-v3-location' })).join(' ')).toBe('Starting point: Building A · Ground');
   expect(texts(renderer!.root).join(' ')).not.toContain('PRIVATE SURVEY SAMPLE');
   expect(renderer!.root.findAll((node) => node.props.testID === 'visitor-start-n-a0b')).toHaveLength(0);
+});
+
+test('manual and QR starts are labeled by source and geographic tooltip uses a generic hidden-node label', () => {
+  for (const [source, label] of [
+    ['manual', 'Manual starting point'], ['qr', 'QR check-in'],
+  ] as const) {
+    let renderer: ReactTestRenderer;
+    const location = { kind: 'node' as const, nodeId: 'n-a0b', zoneId: 'b-a', z: 0, source, seenAt: 10 };
+    act(() => { renderer = create(<VisitorScreen {...base} v3NodeId="n-a0b" manualNodeId={source === 'manual' ? 'n-a0b' : null}
+      qrNodeId={source === 'qr' ? 'n-a0b' : null} v3Location={location} />); });
+    expect(texts(renderer!.root.findByProps({ testID: 'visitor-v3-location' })).join(' ')).toBe(`${label}: Building A · Ground`);
+    expect(texts(renderer!.root).join(' ')).not.toContain('PRIVATE SURVEY SAMPLE');
+    const mapProps = renderer!.root.findByType(MapView).props;
+    expect(mapProps.v3.nodes.find((node: { id: string }) => node.id === 'n-a0b')?.name).toBe('Known location');
+  }
+});
+
+test('unknown and destination-only states never claim a current location', () => {
+  let unknown: ReactTestRenderer;
+  act(() => { unknown = create(<VisitorScreen {...base} v3NodeId={null} v3Location={{ kind: 'unknown' }} />); });
+  expect(texts(unknown!.root.findByProps({ testID: 'visitor-v3-location' })).join(' ')).toBe('Current location: not available');
+
+  let destinationOnly: ReactTestRenderer;
+  act(() => { destinationOnly = create(<VisitorScreen {...base} v3NodeId={null} destinationId="p-landing" />); });
+  const locationText = texts(destinationOnly!.root.findByProps({ testID: 'visitor-v3-location' })).join(' ');
+  expect(locationText).toBe('Current location: choose a starting point');
+  expect(locationText).not.toMatch(/Current location: Upper landing/);
+});
+
+test('Wi-Fi location reports that it is an estimate and includes the reading time', () => {
+  let renderer: ReactTestRenderer;
+  const seenAt = 1_700_000_000_000;
+  act(() => { renderer = create(<VisitorScreen {...base} v3NodeId="n-a0b"
+    v3Location={{ kind: 'node', nodeId: 'n-a0b', zoneId: 'b-a', z: 0, source: 'wifi', seenAt }} />); });
+  const text = texts(renderer!.root.findByProps({ testID: 'visitor-v3-location' })).join(' ');
+  expect(text).toMatch(/^Wi-Fi estimate \(last updated .+\): Building A · Ground$/);
+  expect(text).not.toMatch(/^Current location:/);
 });
 
 test('manual frame selection persists across location changes until Resume follow', () => {

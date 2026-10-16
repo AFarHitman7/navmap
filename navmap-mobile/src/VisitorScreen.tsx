@@ -20,10 +20,15 @@ function geographicInput(map: MapManifest, frameId: string, startId?: string) {
     ? [{ id: zone.id, name: zone.name, bounds: { north: zone.bounds.north, south: zone.bounds.south, east: zone.bounds.east, west: zone.bounds.west } }]
     : []);
   const frame = map.frames.find((candidate) => candidate.id === frameId);
-  const nodes = map.nodes.flatMap((node) => (node.visitorVisible || node.id === startId) && node.position.kind === 'geographic'
-    ? [{ id: node.id, name: map.places.find((place) => place.nodeId === node.id)?.name ?? node.name,
+  const nodes = map.nodes.flatMap((node) => {
+    const place = map.places.find((candidate) => candidate.nodeId === node.id);
+    const visitorEligible = node.visitorVisible && (!node.generated || Boolean(place));
+    const isHiddenStart = node.id === startId && !visitorEligible;
+    return (visitorEligible || isHiddenStart) && node.position.kind === 'geographic'
+    ? [{ id: node.id, name: isHiddenStart ? 'Known location' : place?.name ?? node.name,
       lat: node.position.lat, lng: node.position.lng, z: node.z, zoneId: node.zoneId }]
-    : []);
+    : [];
+  });
   return { boundary, zones, nodes, activeZoneId: frame?.zoneId ?? null, floorFilter: frame?.z ?? 0 };
 }
 
@@ -55,8 +60,9 @@ export function VisitorScreen(props: VisitorScreenProps): React.JSX.Element {
   const destination = map.nodes.find((node) => node.id === destinationNodeId);
   const route = startId && destination ? shortestPathV3(map, startId, destinationNodeId) : null;
   const directions = route ? buildDirections(map, route) : null;
-  const visitorNodes = map.nodes.filter((node) => node.visitorVisible);
   const placeByNodeId = new Map(map.places.map((place) => [place.nodeId, place]));
+  const isVisitorEligible = (node: MapManifest['nodes'][number]) => node.visitorVisible && (!node.generated || placeByNodeId.has(node.id));
+  const visitorNodes = map.nodes.filter(isVisitorEligible);
   const visitorLabel = (nodeId: string) => {
     const node = map.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return 'Selected location';
@@ -85,13 +91,22 @@ export function VisitorScreen(props: VisitorScreenProps): React.JSX.Element {
   }, [map, staticCanvas, selectedFrame?.id, props.packAdapter]);
 
   const staticNodes = selectedFrame?.background ? map.nodes
-    .filter((node) => node.frameId === selectedFrame.id && (node.visitorVisible || node.id === startId) && node.position.kind === 'local')
-    .map((node) => ({ id: node.id, name: node.id === startId && node.generated && !placeByNodeId.has(node.id)
+    .filter((node) => node.frameId === selectedFrame.id && (isVisitorEligible(node) || node.id === startId) && node.position.kind === 'local')
+    .map((node) => ({ id: node.id, name: node.id === startId && !isVisitorEligible(node)
       ? 'Known location' : visitorLabel(node.id),
       x: node.position.kind === 'local' ? node.position.x : 0, y: node.position.kind === 'local' ? node.position.y : 0 })) : [];
   const tileInput = !staticCanvas && activeFrame ? geographicInput(map, activeFrame.id, startId ?? undefined) : null;
-  const locationText = startNode
-    ? `Current location: ${visitorLabel(startNode.id)}`
+  const locationSource = props.v3Location?.kind === 'node' && props.v3Location.nodeId === startId
+    ? props.v3Location.source
+    : props.manualNodeId === startId ? 'manual' : props.qrNodeId === startId ? 'qr' : null;
+  const locationText = startNode && locationSource === 'manual'
+    ? `Manual starting point: ${visitorLabel(startNode.id)}`
+    : startNode && locationSource === 'qr'
+      ? `QR check-in: ${visitorLabel(startNode.id)}`
+      : startNode && locationSource === 'wifi'
+        ? `Wi-Fi estimate (last updated ${new Date(props.v3Location?.kind === 'node' ? props.v3Location.seenAt : 0).toLocaleString()}): ${visitorLabel(startNode.id)}`
+        : startNode
+          ? `Starting point: ${visitorLabel(startNode.id)}`
     : props.v3Location?.kind === 'unknown' ? 'Current location: not available' : 'Current location: choose a starting point';
   const selectDestination = (nodeId: string) => {
     setDestinationNodeId(nodeId);
@@ -105,11 +120,11 @@ export function VisitorScreen(props: VisitorScreenProps): React.JSX.Element {
     <Text testID="visitor-gps-note">GPS can suggest an area; it does not identify a node or floor.</Text>
     <Text testID="visitor-wifi-note">Wi-Fi node positioning is app-only.</Text>
     <Text>Destinations</Text>
-    {visitorNodes.filter((node) => !node.generated || placeByNodeId.has(node.id)).map((node) => <Pressable key={`dest-${node.id}`} testID={`visitor-v3-dest-${node.id}`} onPress={() => selectDestination(node.id)}>
+    {visitorNodes.map((node) => <Pressable key={`dest-${node.id}`} testID={`visitor-v3-dest-${node.id}`} onPress={() => selectDestination(node.id)}>
       <Text>Destination {visitorLabel(node.id)}</Text>
     </Pressable>)}
     <Text>Starting points</Text>
-    {visitorNodes.filter((node) => !node.generated || placeByNodeId.has(node.id)).map((node) => <Pressable key={node.id} testID={`visitor-start-${node.id}`} onPress={() => props.onManualStart(node.id)}>
+    {visitorNodes.map((node) => <Pressable key={node.id} testID={`visitor-start-${node.id}`} onPress={() => props.onManualStart(node.id)}>
       <Text>Start at {visitorLabel(node.id)}</Text>
     </Pressable>)}
     <Pressable testID="visitor-resume-auto" accessibilityRole="button" accessibilityLabel="Resume auto" onPress={() => {

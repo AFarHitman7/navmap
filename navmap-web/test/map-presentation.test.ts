@@ -54,4 +54,17 @@ describe('map presentation projection', () => {
     const hidden = { ...draft, nodes: draft.nodes.map((node) => node.id === 's-a0' || node.id === 's-a1' ? { ...node, visitorVisible: false } : node) };
     expect(projectMap(hidden, 'visitor', { kind: 'none' }).transitions).toEqual([]);
   });
+
+  it('excludes visitor-visible generated nodes unless an authored Place references them', () => {
+    const draft = geographicDraft();
+    draft.nodes = draft.nodes.map((node) => node.id === 'n-a0g'
+      ? { ...node, visitorVisible: true, name: 'PRIVATE GENERATED NAME' } : node);
+    draft.places.push({ id: 'p-survey-stop', name: 'Visitor stop', nodeId: 'n-a0g', zoneId: 'b-a' });
+    const projection = projectMap(draft, 'visitor', { kind: 'none' });
+    expect(projection.nodes.map((node) => node.id)).toContain('n-a0g');
+    expect(projection.nodes.find((node) => node.id === 'n-a0g')?.name).toBe('PRIVATE GENERATED NAME');
+
+    const withoutPlace = { ...draft, places: draft.places.filter((place) => place.nodeId !== 'n-a0g') };
+    expect(projectMap(withoutPlace, 'visitor', { kind: 'none' }).nodes.map((node) => node.id)).not.toContain('n-a0g');
+  });
 });

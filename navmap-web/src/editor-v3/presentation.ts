@@ -8,7 +8,9 @@ export type MapProjection = { nodes: MapNode[]; lines: ProjectedLine[]; handles:
 /** A read-only display model. The full graph stays intact for routing and survey consumers. */
 export function projectMap(document: MapDraft | MapManifest, view: MapView, selection: Selection): MapProjection {
   const nodeById = new Map(document.nodes.map((node) => [node.id, node]));
-  const nodes = document.nodes.filter((node) => view === 'survey' || (view === 'visitor' ? node.visitorVisible : !node.generated));
+  const placeNodeIds = view === 'visitor' ? new Set(document.places.map((place) => place.nodeId)) : null;
+  const nodes = document.nodes.filter((node) => view === 'survey'
+    || (view === 'visitor' ? node.visitorVisible && (!node.generated || placeNodeIds!.has(node.id)) : !node.generated));
   const visibleIds = new Set(nodes.map((node) => node.id));
   const lines: ProjectedLine[] = [];
   if (view !== 'visitor') {

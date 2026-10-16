@@ -26,3 +26,11 @@
 - No GPS watch/live-position overlay was added; this remains Task 15 scope. Survey code was untouched.
 - Native rendering has unit coverage but no actual-device WebView QA.
 - Skill instructions loaded during this follow-up: executing-plans, using-git-worktrees, systematic-debugging, test-driven-development, verification-before-completion, requesting-code-review, receiving-code-review, frontend-design, anti-ui-slop, better-typography, vercel-react-best-practices, webapp-testing, code-security-auditor, and ui-design. No subagents were spawned.
+
+## Task 14 fix round 1
+
+- Native geographic hidden generated start markers now use “Known location,” matching static visitor behavior; UI source distinguishes manual start, QR check-in, Wi-Fi estimate with its reading timestamp, unknown location, and destination-only state.
+- Web visitor canvas projection now shares selector eligibility: visitor-visible authored nodes and explicitly Place-referenced generated nodes only. Full graph routing remains unchanged.
+- Added regressions for hidden generated geographic start names, native location sources/unknown/destination-only, and visitor-visible generated nodes with/without Places in both web canvas types.
+- Verification for this round (run 2026-10-16 in this worktree): web `npm test` 35 suites / 276 tests pass; web `npm run typecheck` passes; web `npm run lint` (oxlint) passes; web `npm run build` passes (pre-existing >500 kB main-chunk warning only). Mobile `npm test` 19 suites / 112 tests pass; mobile `npm run typecheck` passes. Backend skipped: this round's diff touches no backend files.
+- Red/green: with the two source files reverted to HEAD (`presentation.ts`, `VisitorScreen.tsx`) the 3 new web tests and 3 new native tests fail; with the fixes restored all pass (web targeted files 18/18, mobile `visitor-v3` suite 7/7).

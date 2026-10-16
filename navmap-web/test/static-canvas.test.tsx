@@ -90,6 +90,21 @@ describe('static canvas coordinate and lifecycle contract', () => {
     expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
   });
 
+  it('renders explicitly placed generated nodes but excludes unplaced generated nodes', async () => {
+    const draft = staticDraft();
+    const generated = draft.nodes.find((node) => node.id === 's-a0g')!;
+    generated.visitorVisible = true;
+    generated.name = 'PRIVATE GENERATED NAME';
+    draft.places.push({ id: 'p-generated-visitor', name: 'Visitor stop', nodeId: generated.id, zoneId: 'b-a' });
+    const { container, rerender } = render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(container.querySelectorAll('.v5-node-marker')).toHaveLength(3));
+    expect(container.textContent).not.toContain('PRIVATE GENERATED NAME');
+    const noPlace = { ...draft, places: draft.places.filter((place) => place.nodeId !== generated.id) };
+    rerender(<CanvasHost document={noPlace} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(container.querySelectorAll('.v5-node-marker')).toHaveLength(2));
+    expect(container.textContent).not.toContain('PRIVATE GENERATED NAME');
+  });
+
   it('sets static zoom four levels above each fitted frame, providing 16× magnification', async () => {
     const zoomLimits: Array<{ limit: number; fitZoom: number }> = [];
     const originalSetMaxZoom = L.Map.prototype.setMaxZoom;
