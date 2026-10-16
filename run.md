@@ -24,3 +24,19 @@ Bring up backend + web locally, verify them, and report mobile status.
 ## Done check
 
 Report backend URL + `/latest` response, web URL + page state, mobile device status, and PIDs or terminals left running.
+
+## V5 acceptance evidence
+
+- Web: `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`,
+  `npm run e2e` (desktop + mobile projects) from `navmap-web/`.
+- Backend: `npm test`, `npm run typecheck`, `npm run build` from
+  `navmap-backend/`.
+- Mobile: `npm test -- --runInBand`, `npm run typecheck` from
+  `navmap-mobile/`.
+- Record per-package exit/output evidence in
+  `docs/map-authoring-acceptance.md`. Physical-device checks that cannot
+  run are marked "Not run", never "Passed".
+- E2E fixtures (`legacy-v4`, `geo-v5`, `static-two-floor`) live in
+  `navmap-backend/scripts/e2e-server.ts` and use disposable temp storage,
+  never development data. Release order and limits:
+  `docs/map-schema-v5-rollout.md`.

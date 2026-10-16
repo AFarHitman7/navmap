@@ -50,3 +50,21 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## V5 contract and rollout
+
+V4 drafts/manifests stay readable (upgraded in memory only, never
+rewritten). New saves use schemaVersion 5 with explicit geographic/local
+frames; see `CONTRACT.md` and `docs/map-schema-v5-rollout.md`.
+
+Reader-first order: deploy backend/web/mobile readers together, verify V4
+fixtures and packs, then set `MAP_V5_AUTHORING_ENABLED=1`. Rollback unsets
+the flag and stops V5 authoring without converting or deleting saved V5
+maps. Old clients that cannot parse V5 must show an update-required
+message.
+
+Upload limits: source PNG/PDF <= 20 MiB, PDF <= 20 pages, derivative
+<= 4096 px per side and <= 16,000,000 px. Image decoding is bounded to two
+concurrent jobs per process (excess gets 429); per-venue asset quota is
+256 MiB (excess gets 413). Single-process deployment is assumed; see the
+rollout doc before scaling out.

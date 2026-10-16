@@ -4,7 +4,8 @@ import { Icon } from './editor/Icon';
 import { OrganizerV3 } from './OrganizerV3';
 import { OrganizerV5 } from './OrganizerV5';
 import { VisitorV3 } from './VisitorV3';
-import { getCapabilities, getDraftVersion } from './api-v3';
+import { getDraftVersion } from './api-v3';
+import { resolveEditorRoute } from './editor-route';
 import { MapPicker } from './maps/MapPicker';
 
 function Layout() {
@@ -41,8 +42,8 @@ function VenueEditorRoute() {
   const [route, setRoute] = useState<'loading' | 'legacy' | 'v5'>('loading');
   useEffect(() => {
     let live = true;
-    void Promise.all([getDraftVersion(venueId), getCapabilities().catch(() => ({ mapV5AuthoringEnabled: false }))]).then(([version, capabilities]) => {
-      if (live) setRoute(version === 5 || capabilities.mapV5AuthoringEnabled ? 'v5' : 'legacy');
+    void getDraftVersion(venueId).then((version) => {
+      if (live) setRoute(resolveEditorRoute(version));
     }, () => { if (live) setRoute('legacy'); });
     return () => { live = false; };
   }, [venueId]);

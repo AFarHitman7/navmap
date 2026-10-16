@@ -42,3 +42,17 @@ on hardware (see Field acceptance below).
 
 Real-device checks for GPS zone hints, Wi-Fi node matching, QR/manual override,
 offline rendering, and floor-aware routes remain a release gate.
+
+## V5 packs and positioning honesty
+
+Packs carry V5 frame-aware manifests plus verified immutable PNG floor
+assets; unsupported or corrupt pack data is rejected and the previous
+active pack is kept — packs are never deleted on schema errors. V4 packs
+stay readable through the in-memory upgrade adapter.
+
+Static canvases never request GPS and never classify it; GPS is an
+unsnapped outdoor dot with an accuracy ring that never sets a starting
+point or claims an indoor room/floor. Wi-Fi/manual/QR node starts keep
+precedence; stale GPS (>60 s) and stale node observations (>120 s) are
+labelled, never silently treated as live. See
+`docs/map-schema-v5-rollout.md` for limits.

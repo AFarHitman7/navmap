@@ -62,3 +62,42 @@ read maps with drawn routes.
 
 Run `npm test`, `npm run typecheck`, and `npm run build`. Physical Android
 positioning and offline acceptance still requires a real device.
+
+## V5 frame-aware contract (schemaVersion 5)
+
+V5 replaces WGS84 `lat`/`lng` node fields with explicit positions:
+`{ kind: 'geographic', lat, lng }` or `{ kind: 'local', x, y }`. A map has
+one canvas kind (`geographic` | `static`), an optional boundary, indoor
+zones with floors, and frames: one frame per zone/floor plus an optional
+outdoor frame. Nodes, edges, paths, transitions, places, and anchors all
+name their frame; ordinary edges never cross frames.
+
+- Node subcategories are structural: regular nodes, `entrance` transitions
+  (indoor/outdoor pair), and `stair`/`elevator` transitions (cross-floor
+  pair). Path subcategories are `regular` and `stair` (a stair path follows
+  exactly one stair transition's ordered landings).
+- Static frame backgrounds reference immutable layout assets
+  `{ assetId, width, height, sha256, byteLength }` verified against
+  venue-scoped storage. Publication stages verified PNGs, renames the
+  version directory, then commits the version row; failed attempts keep the
+  previous latest version.
+- Routing uses positive costs (geographic edges keep legacy metre weights;
+  static edges use source-pixel distance over frame width; cross-frame
+  transitions use explicit costs). Metre totals are optional and shown only
+  when every edge carries valid metres.
+- V4 drafts and immutable V4 manifests remain readable; V4 is upgraded to
+  V5 in memory only and never rewritten. New saves/publications use
+  schemaVersion 5 and require `MAP_V5_AUTHORING_ENABLED=1` (see
+  `docs/map-schema-v5-rollout.md`).
+- Upload limits: source PNG/PDF <= 20 MiB, PDF <= 20 pages, derivative
+  <= 4096 px per side and <= 16,000,000 px. See the rollout doc for the
+  full limits, GPS/positioning honesty rules, and multi-process caveats.
+
+New endpoints: `POST /api/admin/venues` accepts optional
+`canvasKind: 'geographic' | 'static'`; `PATCH /api/admin/venues/:venueId`
+renames; `POST /api/admin/venues/:venueId/layout-assets` uploads one PNG;
+`GET /api/admin/venues/:venueId/layout-assets/:assetId` serves draft
+artwork; `GET /api/venues/:venueId/versions/:version/assets/:assetId`
+serves published artwork; `GET /api/capabilities` reports the authoring
+flag. Cookie-authenticated writes require a same-origin `Origin` (or
+`Referer`) header; browser test contexts must send it explicitly.

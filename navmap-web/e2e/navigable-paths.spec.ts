@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { adminLogin, createVenue, putDraft } from './admin-api';
 
 const BLANK_V3 = {
   schemaVersion: 4,
@@ -27,14 +28,9 @@ const BLANK_V3 = {
 };
 
 async function seedVenue(request: APIRequestContext, name: string): Promise<string> {
-  await request.post('/api/admin/login', { data: { password: 'browser-test-only' } });
-  const created = await request.post('/api/admin/venues', { data: { name } });
-  expect(created.ok()).toBe(true);
-  const venueId = (await created.json()).id as string;
-  const seeded = await request.put(`/api/admin/venues/${venueId}/draft-v3`, {
-    data: { ...BLANK_V3, venueId },
-  });
-  expect(seeded.ok()).toBe(true);
+  await adminLogin(request);
+  const venueId = await createVenue(request, name);
+  await putDraft(request, venueId, { ...BLANK_V3, venueId });
   return venueId;
 }
 
@@ -178,6 +174,7 @@ test('navigable paths: explicit stairs link with labeled single-floor indicator'
 
   await page.getByRole('button', { name: 'Select zone Building E2E' }).click();
   // The upper landing only renders once its floor is visible.
+  await page.getByText('Layers', { exact: true }).click();
   await page.getByLabel('Visible floor — Building E2E').selectOption('all');
   await startDrawPath(page);
   await page.locator('[data-node="n-g1"]').click();
