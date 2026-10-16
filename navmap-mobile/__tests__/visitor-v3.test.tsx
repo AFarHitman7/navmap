@@ -119,3 +119,62 @@ test('manual frame selection persists across location changes until Resume follo
   expect(renderer!.root.findByProps({ testID: 'visitor-frame-frame-b-a-z0' }).props.accessibilityState.selected).toBe(true);
   expect(base.onResumeAuto).toHaveBeenCalled();
 });
+
+test('fresh GPS evidence renders as an unsnapped dot separate from the routing start', () => {
+  let renderer: ReactTestRenderer;
+  const gpsFix = { lat: 13.051, lon: 80.251, accuracy: 12, seenAt: Date.now() };
+  act(() => {
+    renderer = create(<VisitorScreen
+      {...base} v3NodeId={null} v3Location={null} destinationId="" gpsFix={gpsFix} />);
+  });
+  const mapProps = renderer!.root.findByType(MapView).props;
+  expect(mapProps.gps).toEqual({ lat: 13.051, lng: 80.251, accuracyMeters: 12 });
+  expect(texts(renderer!.root.findByProps({ testID: 'visitor-gps-status' })).join(' '))
+    .toBe('You are here (±12 m). GPS does not set your starting point.');
+  expect(texts(renderer!.root.findByProps({ testID: 'visitor-v3-location' })).join(' '))
+    .toBe('Current location: choose a starting point');
+});
+
+test('outside-venue GPS is labelled outside and never sets a start', () => {
+  let renderer: ReactTestRenderer;
+  const gpsFix = { lat: 14.0, lon: 81.0, accuracy: 30, seenAt: Date.now() };
+  act(() => {
+    renderer = create(<VisitorScreen
+      {...base} v3NodeId={null} v3Location={null} destinationId="" gpsFix={gpsFix} />);
+  });
+  expect(texts(renderer!.root.findByProps({ testID: 'visitor-gps-status' })).join(' '))
+    .toBe('Outside venue (±30 m). GPS does not set your starting point.');
+  expect(renderer!.root.findByType(MapView).props.gps).toEqual({ lat: 14.0, lng: 81.0, accuracyMeters: 30 });
+  expect(texts(renderer!.root.findByProps({ testID: 'visitor-v3-location' })).join(' '))
+    .toBe('Current location: choose a starting point');
+});
+
+test('stale GPS evidence is labelled stale and never becomes a live dot', () => {
+  let renderer: ReactTestRenderer;
+  act(() => {
+    renderer = create(<VisitorScreen
+      {...base} v3NodeId={null} v3Location={null} destinationId=""
+      gpsFix={{ lat: 13.05, lon: 80.25, accuracy: 12, seenAt: 0 }} />);
+  });
+  expect(texts(renderer!.root.findByProps({ testID: 'visitor-gps-status' })).join(' '))
+    .toBe('GPS reading is stale. Choose a known starting point.');
+  expect(renderer!.root.findByType(MapView).props.gps).toBeNull();
+});
+
+test('static canvas ignores GPS evidence and keeps node-based labels', async () => {
+  const { staticDraft } = await import('../src/fixtures/map-v5');
+  const manifest = { ...staticDraft(), version: 2, profiles: [] };
+  const frame = manifest.frames.find((candidate) => candidate.background);
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<VisitorScreen
+      {...base} manifest={manifest} destinationId="p-lobby" v3NodeId="s-a0"
+      v3Location={{ kind: 'node', nodeId: 's-a0', zoneId: 'b-a', z: 0, source: 'manual', seenAt: Date.now() }}
+      manualNodeId="s-a0"
+      packAdapter={{ readBytes: async () => new Uint8Array(frame!.background!.byteLength) } as never}
+      gpsFix={{ lat: 13.05, lon: 80.25, accuracy: 12, seenAt: Date.now() }} />);
+  });
+  expect(renderer!.root.findAll((node) => node.props.testID === 'visitor-gps-status')).toHaveLength(0);
+  expect(renderer!.root.findByType(MapView).props.gps).toBeUndefined();
+  expect(texts(renderer!.root).join(' ')).toContain('Wi-Fi positioning needs native Android capabilities and surveyed profiles.');
+});

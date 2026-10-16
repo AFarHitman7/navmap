@@ -15,9 +15,10 @@ export type CanvasCallbacks = {
   onTransitionClick?: (transitionId: string) => void;
   onEdgeClick?: (from: string, to: string) => void;
 };
-export type CanvasProps = { document: MapDraft | MapManifest; activeFrameId: string; mode: string; callbacks: CanvasCallbacks; view?: 'editor' | 'visitor' | 'survey'; selection?: Selection; showReferencePoints?: boolean };
+export type GpsDot = { lat: number; lng: number; accuracyMeters: number };
+export type CanvasProps = { document: MapDraft | MapManifest; activeFrameId: string; mode: string; callbacks: CanvasCallbacks; view?: 'editor' | 'visitor' | 'survey'; selection?: Selection; showReferencePoints?: boolean; gpsDot?: GpsDot | null };
 
-export function GeographicCanvas({ document, activeFrameId, mode, callbacks, view = 'editor', selection = { kind: 'none' }, showReferencePoints = false }: CanvasProps) {
+export function GeographicCanvas({ document, activeFrameId, mode, callbacks, view = 'editor', selection = { kind: 'none' }, showReferencePoints = false, gpsDot = null }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layers = useRef<L.LayerGroup | null>(null);
@@ -110,7 +111,29 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
       if (view !== 'visitor') badge.getElement()?.setAttribute('data-transition', transition.id);
       if (view === 'editor') badge.on('click', (event) => { L.DomEvent.stopPropagation(event); callbacks.onTransitionClick?.(transition.id); });
     }
-  }, [document, activeFrameId, mode, callbacks, view, mapReady, selection, showReferencePoints]);
+    // Unsnapped raw GPS evidence: a dot plus accuracy circle rendered separately
+    // from projected graph nodes. Never snaps to a node, room, or floor.
+    if (view === 'visitor' && gpsDot && Number.isFinite(gpsDot.lat) && Number.isFinite(gpsDot.lng)
+      && Number.isFinite(gpsDot.accuracyMeters) && gpsDot.accuracyMeters >= 0) {
+      L.circle([gpsDot.lat, gpsDot.lng], {
+        radius: gpsDot.accuracyMeters,
+        color: '#1a5fb4',
+        weight: 2,
+        opacity: 0.8,
+        fillColor: '#1a5fb4',
+        fillOpacity: 0.15,
+        interactive: false,
+        className: 'gps-accuracy-ring',
+      }).addTo(group);
+      const dot = L.marker([gpsDot.lat, gpsDot.lng], {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({ className: 'gps-dot-marker', html: '<span aria-hidden="true"></span>', iconSize: [16, 16], iconAnchor: [8, 8] }),
+      }).addTo(group);
+      dot.bindTooltip('Your GPS position (unsnapped)');
+      dot.getElement()?.setAttribute('data-gps-dot', `${gpsDot.lat},${gpsDot.lng}`);
+    }
+  }, [document, activeFrameId, mode, callbacks, view, mapReady, selection, showReferencePoints, gpsDot]);
   return <div className="map-surface outdoor">
     <div ref={host} className="map-canvas" role="application" aria-label="Geographic map" />
     {tileError && <span className="map-warning">OSM tiles unavailable. Your map edits are still here.</span>}

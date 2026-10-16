@@ -6,6 +6,8 @@ export type LeafletMapInput = {
   path: string[];
   visitor?: boolean;
   onlineTiles?: boolean;
+  /** Unsnapped raw GPS evidence; rendered only on geographic canvases, never on static frames. */
+  gps?: { lat: number; lng: number; accuracyMeters: number } | null;
   staticFrame?: { width: number; height: number; imageDataUri: string; nodes: { id: string; name: string; x: number; y: number }[] };
   v3: {
     boundary: { north: number; south: number; east: number; west: number } | null;
@@ -17,7 +19,9 @@ export type LeafletMapInput = {
 };
 
 export function buildLeafletHtml(input: LeafletMapInput): string {
-  const data = JSON.stringify({ ...input, tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' }).replace(/</g, '\\u003c');
+  // Static frames never receive geographic evidence: strip it from the payload
+  // so an uploaded floor plan cannot render or leak a GPS position.
+  const data = JSON.stringify({ ...input, gps: input.staticFrame ? null : input.gps ?? null, tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' }).replace(/</g, '\\u003c');
   const staticBranch = input.staticFrame ? [
     "if(d.staticFrame){var s=d.staticFrame,sm=L.map('map',{crs:L.CRS.Simple,minZoom:-4,maxZoom:8,zoomSnap:.25,attributionControl:false});var sb=[[0,0],[s.height,s.width]];L.imageOverlay(s.imageDataUri,sb).addTo(sm);sm.fitBounds(sb);for(i=0;i<s.nodes.length;i++){var n=s.nodes[i],pt=[s.height*(1-n.y),s.width*n.x],marker=L.circleMarker(pt,{radius:6,color:'#176f68',fillColor:'#fff',fillOpacity:1}).addTo(sm);if(d.visitor&&n.name)marker.bindTooltip(n.name);else if(!d.visitor)marker.bindTooltip(n.id);}return;}"
   ].join('') : '';
@@ -42,6 +46,7 @@ export function buildLeafletHtml(input: LeafletMapInput): string {
    if(!d.visitor)for(i=0;i<v.zones.length;i++){var z=v.zones[i],zb=[[z.bounds.south,z.bounds.west],[z.bounds.north,z.bounds.east]];L.rectangle(zb,{color:'#c45b32',weight:2,fill:true,fillOpacity:.12}).bindTooltip(z.name).addTo(map);}
    for(i=0;i<v.nodes.length;i++){var n=v.nodes[i];if((v.activeZoneId===null?n.zoneId===null:n.zoneId===v.activeZoneId)&&(v.floorFilter===null||n.z===v.floorFilter)){shown.push(n);var marker=L.circleMarker([n.lat,n.lng],{radius:6}).addTo(map);if(d.visitor&&n.name)marker.bindTooltip(n.name);else if(!d.visitor)marker.bindTooltip(n.id);}}
   if(!b&&!shown.length){map.setView(center,16);}
+   if(d.gps&&isFinite(d.gps.lat)&&isFinite(d.gps.lng)&&isFinite(d.gps.accuracyMeters)&&d.gps.accuracyMeters>=0){L.circle([d.gps.lat,d.gps.lng],{radius:d.gps.accuracyMeters,color:'#1a5fb4',weight:2,opacity:.8,fillColor:'#1a5fb4',fillOpacity:.15,interactive:false,className:'gps-accuracy-ring'}).addTo(map);var gpsDot=L.circleMarker([d.gps.lat,d.gps.lng],{radius:7,color:'#1a5fb4',weight:3,fillColor:'#fff',fillOpacity:1,interactive:false,className:'gps-dot-marker'}).addTo(map);gpsDot.bindTooltip('Your GPS position (unsnapped)');}
 })();
 //# sourceURL=navmap-leaflet</script></body></html>`;
   return html;

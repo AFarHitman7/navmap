@@ -2,8 +2,9 @@ import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { ManifestV3 } from './contract-v3';
 import { upgradeV4Manifest, type MapManifest } from './map-contract';
-import type { LocationState } from './positioning-v3';
+import { gpsDisplayDot, GPS_AREA_NOTE, WIFI_LOCATION_NOTE, type LocationState } from './positioning-v3';
 import { shortestPathV3 } from './route-v3';
+import { containsPoint } from './geo';
 import { MapView } from './map/MapView';
 import type { PackAdapter } from './pack';
 import { encodeBase64, readFrameBackground } from './pack';
@@ -40,6 +41,8 @@ export type VisitorScreenProps = {
   v3Location: LocationState | null;
   v3NodeId: string | null;
   v3ZoneId: string | null;
+  /** Raw GPS evidence for the unsnapped dot/accuracy display; ignored on static canvases. */
+  gpsFix?: { lat: number; lon: number; accuracy: number; seenAt: number } | null;
   onDestination: (placeId: string) => void;
   onManualStart: (nodeId: string) => void;
   onResumeAuto: () => void;
@@ -96,6 +99,17 @@ export function VisitorScreen(props: VisitorScreenProps): React.JSX.Element {
       ? 'Known location' : visitorLabel(node.id),
       x: node.position.kind === 'local' ? node.position.x : 0, y: node.position.kind === 'local' ? node.position.y : 0 })) : [];
   const tileInput = !staticCanvas && activeFrame ? geographicInput(map, activeFrame.id, startId ?? undefined) : null;
+  // Raw GPS evidence is display-only: an unsnapped dot plus accuracy circle,
+  // separate from the node-based routing start. Static canvases ignore it
+  // entirely; invalid or stale (>60s) fixes never become a live dot.
+  const gpsDot = staticCanvas ? null : gpsDisplayDot(props.gpsFix ?? null, Date.now());
+  const gpsOutside = gpsDot !== null && map.boundary?.kind === 'geographic'
+    && !containsPoint(map.boundary, gpsDot.lat, gpsDot.lon);
+  const gpsStatus = staticCanvas ? null
+    : gpsDot === null && props.gpsFix != null ? 'GPS reading is stale. Choose a known starting point.'
+    : gpsDot !== null && gpsOutside ? `Outside venue (±${Math.round(gpsDot.accuracy)} m). GPS does not set your starting point.`
+    : gpsDot !== null ? `You are here (±${Math.round(gpsDot.accuracy)} m). GPS does not set your starting point.`
+    : null;
   const locationSource = props.v3Location?.kind === 'node' && props.v3Location.nodeId === startId
     ? props.v3Location.source
     : props.manualNodeId === startId ? 'manual' : props.qrNodeId === startId ? 'qr' : null;
@@ -117,8 +131,9 @@ export function VisitorScreen(props: VisitorScreenProps): React.JSX.Element {
   return <View testID="visitor-screen">
     <Text testID="visitor-title">Visitor</Text>
     <Text testID="visitor-v3-location">{locationText}</Text>
-    <Text testID="visitor-gps-note">GPS can suggest an area; it does not identify a node or floor.</Text>
-    <Text testID="visitor-wifi-note">Wi-Fi node positioning is app-only.</Text>
+    {gpsStatus !== null && <Text testID="visitor-gps-status">{gpsStatus}</Text>}
+    <Text testID="visitor-gps-note">{GPS_AREA_NOTE}</Text>
+    <Text testID="visitor-wifi-note">{WIFI_LOCATION_NOTE}</Text>
     <Text>Destinations</Text>
     {visitorNodes.map((node) => <Pressable key={`dest-${node.id}`} testID={`visitor-v3-dest-${node.id}`} onPress={() => selectDestination(node.id)}>
       <Text>Destination {visitorLabel(node.id)}</Text>
@@ -153,7 +168,9 @@ export function VisitorScreen(props: VisitorScreenProps): React.JSX.Element {
         ? <MapView path={[]} visitor staticFrame={{ width: selectedFrame.background.width, height: selectedFrame.background.height,
           imageDataUri: backgroundData, nodes: staticNodes }} v3={{ boundary: null, zones: [], nodes: [], activeZoneId: null, floorFilter: null }} />
         : <Text testID="visitor-static-note">{selectedFrame?.background ? 'Could not load this floor plan offline.' : 'No plan is assigned to this floor.'}</Text>
-    ) : tileInput ? <MapView path={[]} onlineTiles visitor v3={tileInput} />
+    ) : tileInput ? <MapView path={[]} onlineTiles visitor
+      gps={gpsDot ? { lat: gpsDot.lat, lng: gpsDot.lon, accuracyMeters: gpsDot.accuracy } : null}
+      v3={tileInput} />
       : <Text testID="visitor-static-note">This map has no geographic frame to display.</Text>}
   </View>;
 }

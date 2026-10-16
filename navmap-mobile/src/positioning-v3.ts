@@ -97,6 +97,45 @@ export function classifyGpsZone(
 
 export const WIFI_FRESH_MS = 60_000;
 export const NODE_STALE_MS = 120_000;
+/** Raw GPS evidence older than this is never shown as a live dot. */
+export const GPS_STALE_MS = 60_000;
+
+export type GpsFixEvidence = { lat: number; lon: number; accuracy: number; seenAt: number };
+
+export function isValidGpsFix(fix: unknown): fix is GpsFixEvidence {
+  if (typeof fix !== 'object' || fix === null) return false;
+  const f = fix as Record<string, unknown>;
+  if (typeof f.lat !== 'number' || typeof f.lon !== 'number') return false;
+  if (typeof f.accuracy !== 'number' || typeof f.seenAt !== 'number') return false;
+  if (!Number.isFinite(f.lat) || !Number.isFinite(f.lon)) return false;
+  if (!Number.isFinite(f.accuracy) || f.accuracy < 0) return false;
+  if (!Number.isFinite(f.seenAt)) return false;
+  if (f.lat < -90 || f.lat > 90 || (f.lon as number) < -180 || (f.lon as number) > 180) return false;
+  return true;
+}
+
+export function isGpsFixStale(seenAt: number, now: number = Date.now()): boolean {
+  return now - seenAt > GPS_STALE_MS;
+}
+
+/**
+ * Raw GPS evidence for the unsnapped dot/accuracy display. Returns null for
+ * missing, invalid, or stale fixes so they never become a precise live dot.
+ * GPS evidence never resolves to a node — see resolveLocation.
+ */
+export function gpsDisplayDot(
+  fix: GpsFixEvidence | null | undefined,
+  now: number = Date.now(),
+): GpsFixEvidence | null {
+  if (!isValidGpsFix(fix)) return null;
+  if (isGpsFixStale(fix.seenAt, now)) return null;
+  return fix;
+}
+
+/** Honest permission messaging: Wi-Fi positioning is a native capability. */
+export const WIFI_LOCATION_NOTE = 'Wi-Fi positioning needs native Android capabilities and surveyed profiles.';
+/** GPS narrows to an area only; it never identifies an indoor node or floor. */
+export const GPS_AREA_NOTE = 'GPS can suggest an area; it does not identify a node or floor.';
 
 export type LocationState =
   | { kind: 'unknown' }

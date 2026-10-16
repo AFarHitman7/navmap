@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VisitorV3 } from '../src/VisitorV3';
 import fixture from '../src/fixtures/unified-v3.json';
 import v5Fixture from '../src/fixtures/map-v5-static.json';
+import geoFixture from '../src/fixtures/map-v5-geographic.json';
 
 const manifest = { ...fixture, venueId: 'demo', version: 1, profiles: [], places: [
   { id: 'a0', name: 'Building A ground lobby', nodeId: 'n-a0', zoneId: 'b-a' },
@@ -102,5 +103,101 @@ describe('public visitor map', () => {
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a0');
     expect(screen.getByText('You’re already at your destination.')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('visitor GPS display (opt-in)', () => {
+  const geoManifest = { ...geoFixture, venueId: 'demo', version: 2, profiles: [] };
+  function stubManifestFetch(body: unknown, venueId = 'demo', version = 2, name = 'Geo Hall') {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/latest')
+      ? jsonResponse({ venueId, version, name }) : jsonResponse(body)));
+  }
+  function mockGeolocation() {
+    const watch = vi.fn(() => 11);
+    const clear = vi.fn();
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: { watchPosition: watch, clearWatch: clear } });
+    return { watch, clear };
+  }
+  afterEach(() => {
+    try { delete (navigator as unknown as Record<string, unknown>).geolocation; } catch { /* keep jsdom default */ }
+  });
+
+  it('makes no geolocation call until Locate me is pressed', async () => {
+    stubManifestFetch(geoManifest);
+    const { watch } = mockGeolocation();
+    render(<VisitorV3 />);
+    expect(await screen.findByLabelText('Starting point')).toBeVisible();
+    expect(watch).not.toHaveBeenCalled();
+    expect(screen.getByTestId('gps-status')).toHaveTextContent('GPS is off');
+  });
+
+  it('renders an unsnapped dot plus accuracy circle without setting a start', async () => {
+    stubManifestFetch(geoManifest);
+    const { watch } = mockGeolocation();
+    const user = userEvent.setup();
+    render(<VisitorV3 />);
+    await user.click(await screen.findByRole('button', { name: 'Locate me' }));
+    expect(watch).toHaveBeenCalledTimes(1);
+    const onSuccess = watch.mock.calls[0][0] as (pos: {
+      coords: { latitude: number; longitude: number; accuracy: number }; timestamp: number;
+    }) => void;
+    const { act } = await import('react');
+    await act(async () => { onSuccess({ coords: { latitude: 13.051, longitude: 80.251, accuracy: 12 }, timestamp: Date.now() }); });
+    expect(screen.getByTestId('gps-status')).toHaveTextContent('You are here (±12 m)');
+    expect(document.querySelector('[data-gps-dot="13.051,80.251"]')).not.toBeNull();
+    expect(document.querySelector('.gps-accuracy-ring')).not.toBeNull();
+    // GPS never silently snaps to the nearest graph point or picks a start.
+    expect(screen.getByLabelText('Starting point')).toHaveValue('');
+    expect(screen.getByTestId('gps-status')).toHaveTextContent('does not set your starting point');
+  });
+
+  it('labels an outside-venue fix as outside without setting a start', async () => {
+    stubManifestFetch(geoManifest);
+    const { watch } = mockGeolocation();
+    const user = userEvent.setup();
+    render(<VisitorV3 />);
+    await user.click(await screen.findByRole('button', { name: 'Locate me' }));
+    const onSuccess = watch.mock.calls[0][0] as (pos: {
+      coords: { latitude: number; longitude: number; accuracy: number }; timestamp: number;
+    }) => void;
+    const { act } = await import('react');
+    await act(async () => { onSuccess({ coords: { latitude: 14.0, longitude: 81.0, accuracy: 30 }, timestamp: Date.now() }); });
+    expect(screen.getByTestId('gps-status')).toHaveTextContent('Outside venue (±30 m)');
+    expect(screen.getByLabelText('Starting point')).toHaveValue('');
+  });
+
+  it('explains denied permission and keeps manual start available', async () => {
+    stubManifestFetch(geoManifest);
+    const { watch } = mockGeolocation();
+    const user = userEvent.setup();
+    render(<VisitorV3 />);
+    await user.click(await screen.findByRole('button', { name: 'Locate me' }));
+    const onError = watch.mock.calls[0][1] as (err: { code: number }) => void;
+    const { act } = await import('react');
+    await act(async () => { onError({ code: 1 }); });
+    expect(screen.getByTestId('gps-status')).toHaveTextContent('Location permission denied');
+    expect(screen.getByLabelText('Starting point')).toBeVisible();
+  });
+
+  it('never offers Locate me on a static upload', async () => {
+    stubManifestFetch({ ...v5Fixture, venueId: 'demo', version: 2, profiles: [] });
+    const { watch } = mockGeolocation();
+    render(<VisitorV3 />);
+    expect(await screen.findByLabelText('Starting point')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Locate me' })).toBeNull();
+    expect(screen.queryByTestId('gps-status')).toBeNull();
+    expect(watch).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-gps-dot]')).toBeNull();
+  });
+
+  it('cancels the watch when switching maps', async () => {
+    stubManifestFetch(geoManifest);
+    const { watch, clear } = mockGeolocation();
+    const user = userEvent.setup();
+    const { rerender } = render(<VisitorV3 />);
+    await user.click(await screen.findByRole('button', { name: 'Locate me' }));
+    expect(watch).toHaveBeenCalledTimes(1);
+    rerender(<VisitorV3 venueId="elsewhere" />);
+    expect(clear).toHaveBeenCalledWith(11);
   });
 });

@@ -4,6 +4,8 @@ import type { MapManifest } from './map-contract';
 import { CanvasHost } from './map/CanvasHost';
 import { shortestPathV3 } from './route-v3';
 import { buildDirections } from '../../shared/src/directions';
+import { useGeolocation } from './location/useGeolocation';
+import { containsPoint } from './geo-v3';
 
 export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   const [manifest, setManifest] = useState<MapManifest | null>(null);
@@ -31,6 +33,13 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   }, [venueId, attempt]);
 
   const currentManifest = loadedVenueId === venueId ? manifest : null;
+  const canvasKind = currentManifest?.canvas.kind ?? 'geographic';
+  const geo = useGeolocation({ enabled: currentManifest !== null, canvasKind });
+  const stopGps = geo.stop;
+  // Switching maps or explicitly switching frames cancels any active watch;
+  // the hook also cancels on unmount and canvas-kind switches. Picking a
+  // known start node does not cancel: GPS evidence stays visible separately.
+  useEffect(() => () => { stopGps(); }, [venueId, manualFrameId, stopGps]);
   const graphNodes = useMemo(() => currentManifest?.nodes ?? [], [currentManifest]);
   const graphById = useMemo(() => new Map(graphNodes.map((node) => [node.id, node])), [graphNodes]);
   const visibleNodes = useMemo(() => graphNodes.filter((node) => node.visitorVisible && (!node.generated || currentManifest?.places.some((place) => place.nodeId === node.id))), [graphNodes, currentManifest]);
@@ -63,6 +72,31 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   const visitorChoices = visibleNodes.map((node) => ({ node, label: placeByNodeId.get(node.id)?.name ?? node.name }));
   const chooseFrame = (frameId: string) => setManualFrameId(frameId);
   const selectedNode = start && graphById.get(start);
+
+  const boundary = currentManifest.boundary;
+  const gpsOutside = geo.location.kind === 'gps' && boundary?.kind === 'geographic'
+    ? !containsPoint(boundary, geo.location.position.lat, geo.location.position.lng)
+    : false;
+  const gpsDot = geo.location.kind === 'gps'
+    ? { lat: geo.location.position.lat, lng: geo.location.position.lng, accuracyMeters: geo.location.accuracyMeters }
+    : null;
+  const gpsStatus = ((): string | null => {
+    if (canvasKind !== 'geographic') return null;
+    const location = geo.location;
+    if (location.kind === 'gps') {
+      return gpsOutside
+        ? `Outside venue (±${Math.round(location.accuracyMeters)} m). GPS does not set your starting point.`
+        : `You are here (±${Math.round(location.accuracyMeters)} m). GPS does not set your starting point.`;
+    }
+    if (location.kind !== 'unknown') return null;
+    switch (location.reason) {
+      case 'idle': return 'GPS is off. Choose Locate me to show your position.';
+      case 'denied': return 'Location permission denied. Choose a starting point above instead.';
+      case 'timeout': return 'GPS timed out. Choose a starting point above instead.';
+      case 'stale': return 'GPS reading is stale. Choose Locate me again or pick a starting point above.';
+      default: return 'GPS is unavailable. Choose a starting point above instead.';
+    }
+  })();
 
   return <div className="visitor">
     <div className="workspace-heading"><div>
@@ -100,6 +134,10 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
         </section>}
       </aside>
       <div className="visitor-map">
+        {canvasKind === 'geographic' && <div className="visitor-gps" aria-live="polite">
+          <button type="button" onClick={() => geo.start()} aria-label="Locate me">Locate me</button>
+          {gpsStatus && <p data-testid="gps-status">{gpsStatus}</p>}
+        </div>}
         <div className="visitor-frame-picker" aria-label="Map layers">
           <span className="layer-current-frame" aria-live="polite">{activeFrame ? `${currentManifest.indoorZones.find((zone) => zone.id === activeFrame.zoneId)?.name ?? 'Outdoor'} · ${currentManifest.indoorZones.find((zone) => zone.id === activeFrame.zoneId)?.floors.find((floor) => floor.z === activeFrame.z)?.label ?? 'Outdoor'}` : 'Choose a floor'}</span>
           <label>Manual floor
@@ -114,7 +152,7 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
         {manualFrameId && <button type="button" className="text-button" onClick={() => setManualFrameId(null)}>Resume follow</button>}
         <div className="map-frame">
           {activeFrame && <CanvasHost document={currentManifest} activeFrameId={activeFrame.id} mode="navigate" view="visitor"
-            callbacks={{}} selection={selectedNode ? { kind: 'node', id: selectedNode.id } : { kind: 'none' }} />}
+            callbacks={{}} gpsDot={gpsDot} selection={selectedNode ? { kind: 'node', id: selectedNode.id } : { kind: 'none' }} />}
         </div>
         {start && <div className="visitor-location" aria-label="Current location">
           Starting from {startNode?.generated && !placeByNodeId.has(start) ? 'Known location' : locationLabel(start)}

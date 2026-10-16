@@ -256,6 +256,12 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
   const manifestCanvas = manifest !== null && (manifest as MapManifest).schemaVersion === 5
     ? (manifest as MapManifest).canvas
     : undefined;
+  const isStaticCanvas = manifestCanvas?.kind === 'static';
+  // Static mode disables GPS watching/classification: drop any retained fix
+  // so an uploaded floor plan never shows geographic evidence.
+  React.useEffect(() => {
+    if (isStaticCanvas) setGps(null);
+  }, [isStaticCanvas]);
   const gpsZone = manifestV3 && gps
     ? classifyGpsZone({ boundary: manifestV3.boundary, indoorZones: manifestV3.indoorZones, canvas: manifestCanvas }, gps.lat, gps.lon)
     : null;
@@ -323,6 +329,7 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
             v3Location={v3Location}
             v3NodeId={v3NodeId}
             v3ZoneId={v3ZoneId}
+            gpsFix={isStaticCanvas ? null : gps}
             onResumeAuto={resumeAuto}
           />
         </>
