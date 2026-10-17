@@ -4,7 +4,7 @@ The local web app has a unified geographic V3 editor and a public visitor map.
 Open `/` for the demo editor or `/editor/:venueId` for another venue. The Visitor
 tab opens `/v/:venueId`, showing the latest published map without organizer
 sign-in, with starting-point/destination routing and floor-by-floor directions.
-There is no legacy editor or maps list.
+Named maps are managed from the header picker; V4 maps that cannot use V5 open in a labelled legacy rollback editor.
 
 ## Setup
 

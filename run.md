@@ -11,6 +11,7 @@ Bring up backend + web locally, verify them, and report mobile status.
 1. Checks:
    - `node --version`, `npm --version`.
    - `navmap-backend/.env` and `navmap-web/.env` exist; if not, stop and say `setup.md` must be run first.
+   - `navmap-backend/.env` sets `MAP_V5_AUTHORING_ENABLED=1` when the V5 (named geographic/static) editor is needed; without it the organizer shows V5 read-only and routes V4 maps to the legacy editor. The server reports the flag at `GET /api/capabilities` (`{mapV5AuthoringEnabled}`).
 2. Start backend in background:
    - `cd navmap-backend && npm run dev` (uses `HOST`/`PORT` from `.env`, default `http://127.0.0.1:3000`).
    - Verify `GET /api/venues/demo/latest` returns 200 with `{venueId, version}` or 404 `{error:no published version}`. 404 before first publish is normal.

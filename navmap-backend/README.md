@@ -8,7 +8,8 @@ routes or migration paths.
 
 ```powershell
 copy .env.example .env
-# Set ADMIN_PASSWORD; optional DATA_DIR=./data, HOST=0.0.0.0, PORT=3000
+# Set ADMIN_PASSWORD; optional DATA_DIR=./data, HOST=0.0.0.0, PORT=3000,
+#   MAP_V5_AUTHORING_ENABLED=1 (default off; enables the new V5 editor)
 npm ci
 npm run db:init
 npm run dev

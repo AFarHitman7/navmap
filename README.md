@@ -4,7 +4,7 @@ Single root repo for the NavMap project. See `setup.md` (first-time setup) and `
 
 ## Layout
 
-- `navmap-backend/` — API + SQLite store, v3 contract only
+- `navmap-backend/` — API + SQLite store (V5 authoring, V4 read-compatible)
 - `navmap-web/` — organizer + visitor web app
 - `navmap-mobile/` — React Native app
 - `docs/` — implementation plan and notes
