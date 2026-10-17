@@ -1,6 +1,15 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import type { WifiScanResults } from './scan';
 
+/**
+ * Honest capability messaging for permission prompts and settings screens.
+ * Wi-Fi positioning needs native Android capabilities and surveyed profiles;
+ * GPS suggests an area only and never identifies an indoor node or floor.
+ * Canonical strings live in positioning-v3 so pure-logic tests can assert
+ * them without loading the native bridge.
+ */
+export { GPS_AREA_NOTE, WIFI_LOCATION_NOTE } from './positioning-v3';
+
 const { WifiScanModule, AnchorQrModule } = NativeModules as {
   WifiScanModule?: { requestScan: () => Promise<boolean> };
   AnchorQrModule?: { scanAnchor: () => Promise<string> };

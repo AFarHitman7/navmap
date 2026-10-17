@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { adminLogin, createVenue, putDraft } from './admin-api';
 
 async function drag(page: Page, testId: string, a: [number, number], b: [number, number]) {
   const canvas = page.getByTestId(testId);
@@ -30,12 +31,10 @@ async function mapPaneTransform(page: Page) {
 test('unified map: boundary, two zones, nodes, connect, publish v4', async ({ page, request }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await request.post('/api/admin/login', { data: { password: 'browser-test-only' } });
+  await adminLogin(request);
   // Fresh venue per run: version counters are shared across projects in one run.
-  const created = await request.post('/api/admin/venues', { data: { name: 'Unified E2E' } });
-  expect(created.ok()).toBe(true);
-  const venueId = (await created.json()).id as string;
-  await request.put(`/api/admin/venues/${venueId}/draft-v3`, { data: { ...BLANK_V3, venueId } });
+  const venueId = await createVenue(request, 'Unified E2E');
+  await putDraft(request, venueId, { ...BLANK_V3, venueId });
   await page.goto(`/editor/${venueId}`);
   await page.getByLabel('Admin password').fill('browser-test-only');
   await page.getByRole('button', { name: 'Sign in' }).click();
@@ -101,18 +100,14 @@ test('unified map: boundary, two zones, nodes, connect, publish v4', async ({ pa
 });
 
 test('node drag: move mode drags selected marker without empty-map panning', async ({ page, request }) => {
-  await request.post('/api/admin/login', { data: { password: 'browser-test-only' } });
-  const created = await request.post('/api/admin/venues', { data: { name: 'Node Drag E2E' } });
-  expect(created.ok()).toBe(true);
-  const venueId = (await created.json()).id as string;
-  await request.put(`/api/admin/venues/${venueId}/draft-v3`, {
-    data: {
+  await adminLogin(request);
+  const venueId = await createVenue(request, 'Node Drag E2E');
+  await putDraft(request, venueId, {
       ...BLANK_V3,
       schemaVersion: 4,
       venueId,
       boundary: { north: 13.1, south: 13, east: 80.3, west: 80.2 },
       nodes: [{ id: 'n-drag', name: 'Outdoor drag point', lat: 13.05, lng: 80.25, z: 0, zoneId: null, fingerprintRevision: 1 }],
-    },
   });
 
   await page.goto(`/editor/${venueId}`);

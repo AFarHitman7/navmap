@@ -1,4 +1,7 @@
 import { parseDraftV3, parseManifestV3, type DraftV3, type ManifestV3 } from './contract-v3';
+import { parseMapDraft, parseMapManifest, type MapDraft, type MapManifest } from './map-contract';
+import { upgradeV4Manifest } from './map-contract';
+export type { LayoutAsset } from './layout-api';
 
 export class PublishValidationError extends Error {
   readonly issues: string[];
@@ -6,6 +9,35 @@ export class PublishValidationError extends Error {
     super(message);
     this.issues = issues;
   }
+}
+
+/** Structured 409 when a save reuses a stale fingerprint revision. */
+export class RevisionConflictError extends Error {
+  readonly code = 'revision_conflict' as const;
+  readonly nodeIds: string[];
+  readonly currentRevisions: Record<string, number>;
+  constructor(message: string, nodeIds: string[], currentRevisions: Record<string, number>) {
+    super(message);
+    this.nodeIds = nodeIds;
+    this.currentRevisions = currentRevisions;
+  }
+}
+
+function throwRevisionConflictIfPresent(res: Response, body: unknown): void {
+  if (res.status !== 409 || typeof body !== 'object' || body === null) return;
+  const conflict = body as { code?: unknown; nodeIds?: unknown; currentRevisions?: unknown; error?: unknown };
+  if (conflict.code !== 'revision_conflict' || !Array.isArray(conflict.nodeIds)) return;
+  const currentRevisions: Record<string, number> = {};
+  if (conflict.currentRevisions && typeof conflict.currentRevisions === 'object') {
+    for (const [id, rev] of Object.entries(conflict.currentRevisions as Record<string, unknown>)) {
+      if (typeof rev === 'number') currentRevisions[id] = rev;
+    }
+  }
+  throw new RevisionConflictError(
+    typeof conflict.error === 'string' ? `${conflict.error} (status 409)` : `Save conflict (status 409)`,
+    conflict.nodeIds.filter((id): id is string => typeof id === 'string'),
+    currentRevisions,
+  );
 }
 
 export async function login(password: string): Promise<void> {
@@ -62,7 +94,10 @@ export async function saveDraftV3(draft: DraftV3, venueId: string = draft.venueI
     body: JSON.stringify(draft),
   });
   const body = await readJson(res);
-  if (!res.ok) throwForStatus(res, body);
+  if (!res.ok) {
+    throwRevisionConflictIfPresent(res, body);
+    throwForStatus(res, body);
+  }
   const saved = parseDraftV3(body);
   if (saved.venueId !== venueId) throw new Error('Server returned the wrong map');
   return saved;
@@ -109,5 +144,147 @@ export async function publishV3(venueId = 'demo'): Promise<{ manifest: ManifestV
   }
   if (!res.ok) throwForStatus(res, body);
   const manifest = parseManifestV3((body as { manifest?: unknown }).manifest ?? body);
+  return { manifest, downloadUrl: `/api/venues/${manifest.venueId}/versions/${manifest.version}/manifest` };
+}
+
+export type Capabilities = { mapV5AuthoringEnabled: boolean };
+
+export type VenueSummary = { id: string; name: string; latestVersion: number };
+
+export async function listMaps(signal?: AbortSignal): Promise<VenueSummary[]> {
+  const res = await fetch('/api/admin/venues', { signal });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  if (!Array.isArray(body) || !body.every((item) => item && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.latestVersion === 'number')) {
+    throw new Error('Server returned an invalid map list');
+  }
+  return body as VenueSummary[];
+}
+
+export async function createMap(name: string, kind: 'geographic' | 'static'): Promise<VenueSummary> {
+  const res = await fetch('/api/admin/venues', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, canvasKind: kind }) });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  return body as VenueSummary;
+}
+
+export async function renameMap(id: string, name: string): Promise<VenueSummary> {
+  const res = await fetch(`/api/admin/venues/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  return body as VenueSummary;
+}
+
+/** Reader-first rollout gate: V5 authoring stays disabled until the server (and docs) say otherwise. */
+export async function getCapabilities(signal?: AbortSignal): Promise<Capabilities> {
+  const res = await fetch('/api/capabilities', { signal });
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  if (typeof body !== 'object' || body === null || typeof (body as { mapV5AuthoringEnabled?: unknown }).mapV5AuthoringEnabled !== 'boolean') {
+    throw new Error('Server returned invalid capabilities');
+  }
+  return { mapV5AuthoringEnabled: (body as { mapV5AuthoringEnabled: boolean }).mapV5AuthoringEnabled };
+}
+
+export async function isV5AuthoringEnabled(): Promise<boolean> {
+  try {
+    return (await getCapabilities()).mapV5AuthoringEnabled;
+  } catch {
+    return false;
+  }
+}
+
+async function requireV5Authoring(): Promise<void> {
+  if (!(await isV5AuthoringEnabled())) {
+    throw new Error('V5 map authoring is disabled on this server (MAP_V5_AUTHORING_ENABLED)');
+  }
+}
+
+export async function getDraftV5(venueId = 'demo'): Promise<MapDraft> {
+  const res = await fetch(`${venuePath(venueId)}/draft-v3`);
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  const draft = parseMapDraft(body);
+  if (draft.venueId !== venueId) throw new Error('Server returned the wrong map');
+  return draft;
+}
+
+export async function getDraftVersion(venueId = 'demo'): Promise<4 | 5> {
+  const res = await fetch(`${venuePath(venueId)}/draft-v3`);
+  const body = await readJson(res);
+  if (!res.ok) throwForStatus(res, body);
+  if (!body || typeof body !== 'object') throw new Error('Server returned an invalid map');
+  const version = (body as { schemaVersion?: unknown }).schemaVersion;
+  if (version !== 4 && version !== 5) throw new Error('Server returned an unsupported map version');
+  return version;
+}
+
+/** Explicit V5 save: gated on the capability flag; never rewrites V4 publications. */
+export async function saveDraftV5(draft: MapDraft, venueId: string = draft.venueId): Promise<MapDraft> {
+  await requireV5Authoring();
+  const res = await fetch(`${venuePath(venueId)}/draft-v3`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(draft),
+  });
+  const body = await readJson(res);
+  if (!res.ok) {
+    throwRevisionConflictIfPresent(res, body);
+    throwForStatus(res, body);
+  }
+  const saved = parseMapDraft(body);
+  if (saved.venueId !== venueId) throw new Error('Server returned the wrong map');
+  return saved;
+}
+
+export async function getPublishedManifestV5(venueId = 'demo', signal?: AbortSignal): Promise<MapManifest> {
+  const path = `/api/venues/${encodeURIComponent(venueId)}`;
+  const latestResponse = await fetch(`${path}/latest`, { signal });
+  const latest = await readJson(latestResponse);
+  if (!latestResponse.ok) throwForStatus(latestResponse, latest);
+  if (typeof latest !== 'object' || latest === null || !('venueId' in latest) || latest.venueId !== venueId
+    || !('version' in latest) || typeof latest.version !== 'number' || !Number.isInteger(latest.version) || latest.version <= 0) {
+    throw new Error('Server returned an invalid published version');
+  }
+  const response = await fetch(`${path}/versions/${latest.version}/manifest`, { signal });
+  const body = await readJson(response);
+  if (!response.ok) throwForStatus(response, body);
+  const manifest = parseMapManifest(body);
+  if (manifest.venueId !== venueId || manifest.version !== latest.version) throw new Error('Server returned the wrong published map');
+  return manifest;
+}
+
+export async function getPublishedVisitorMap(venueId = 'demo', signal?: AbortSignal): Promise<{ manifest: MapManifest; name: string }> {
+  const path = `/api/venues/${encodeURIComponent(venueId)}`;
+  const latestResponse = await fetch(`${path}/latest`, { signal });
+  const latest = await readJson(latestResponse);
+  if (!latestResponse.ok) throwForStatus(latestResponse, latest);
+  if (!latest || typeof latest !== 'object' || !('venueId' in latest) || latest.venueId !== venueId
+    || !('version' in latest) || typeof latest.version !== 'number' || !Number.isInteger(latest.version) || latest.version <= 0) {
+    throw new Error('Server returned an invalid published version');
+  }
+  const response = await fetch(`${path}/versions/${latest.version}/manifest`, { signal });
+  const body = await readJson(response);
+  if (!response.ok) throwForStatus(response, body);
+  const raw = (body as { manifest?: unknown }).manifest ?? body;
+  const schemaVersion = (raw as { schemaVersion?: unknown })?.schemaVersion;
+  const manifest = schemaVersion === 5 ? parseMapManifest(raw) : schemaVersion === 4 ? upgradeV4Manifest(raw) : null;
+  if (!manifest || manifest.venueId !== venueId || manifest.version !== latest.version) throw new Error('Server returned the wrong published map');
+  return { manifest, name: 'name' in latest && typeof latest.name === 'string' && latest.name.trim() ? latest.name : venueId };
+}
+
+/** Explicit V5 publish: gated on the capability flag. */
+export async function publishV5(venueId = 'demo'): Promise<{ manifest: MapManifest; downloadUrl: string }> {
+  await requireV5Authoring();
+  const res = await fetch(`${venuePath(venueId)}/publish-v3`, { method: 'POST' });
+  const body = await readJson(res);
+  if (!res.ok && typeof body === 'object' && body && 'errors' in body && Array.isArray((body as { errors?: unknown }).errors)) {
+    throw new PublishValidationError(
+      String((body as { error?: string }).error ?? 'Publish failed'),
+      (body as { errors: unknown[] }).errors.filter((item): item is string => typeof item === 'string'),
+    );
+  }
+  if (!res.ok) throwForStatus(res, body);
+  const manifest = parseMapManifest((body as { manifest?: unknown }).manifest ?? body);
   return { manifest, downloadUrl: `/api/venues/${manifest.venueId}/versions/${manifest.version}/manifest` };
 }

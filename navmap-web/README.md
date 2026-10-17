@@ -4,7 +4,7 @@ The local web app has a unified geographic V3 editor and a public visitor map.
 Open `/` for the demo editor or `/editor/:venueId` for another venue. The Visitor
 tab opens `/v/:venueId`, showing the latest published map without organizer
 sign-in, with starting-point/destination routing and floor-by-floor directions.
-There is no legacy editor or maps list.
+Named maps are managed from the header picker; V4 maps that cannot use V5 open in a labelled legacy rollback editor.
 
 ## Setup
 
@@ -68,3 +68,29 @@ npm run typecheck
 npm run lint
 npm run build
 ```
+
+## V5 map authoring and visitor maps
+
+Named maps are managed from the header picker (`New map`, `Rename map`); each
+map is one canvas kind (`Geographic` or `Static floor plan`) chosen at
+creation and never converted. V5 creation/saving requires the server flag
+`MAP_V5_AUTHORING_ENABLED=1`, reported by `GET /api/capabilities`; the
+editor is read-only while the flag is off.
+
+Every edit tool (boundary, building, node, path, entrance/stair, places,
+floor backgrounds, calibration) supports Undo/Redo, including undoing a
+background assignment or place/connection deletion. Pending gestures are
+never part of saved history: `Escape` or `Ctrl+Z` discards them, and
+switching maps with unsaved changes asks explicitly.
+
+Geographic editors zoom to 24 (OSM raster tiles clamp at native z19).
+Static maps are PNG floor plans assigned per floor, optionally calibrated
+to metres; uncalibrated routes show no metre totals. Visitor maps show only
+destinations and source-labelled positions — never path networks, route
+lines, or survey reference points.
+
+Browser acceptance: `npm run e2e` (Playwright, desktop + mobile projects).
+Cookie-authenticated API contexts in `e2e/` must send
+`Origin: http://127.0.0.1:5197`; the server rejects origin-less writes
+with 403. See `docs/map-authoring-acceptance.md` and
+`docs/map-schema-v5-rollout.md`.

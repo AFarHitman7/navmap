@@ -8,7 +8,17 @@ import {
   type PlaceV3,
 } from '../contract-v3';
 import { containsBounds, containsPoint, distanceMeters, rectsOverlap } from '../geo-v3';
-import { connectLegacyPathNodes, isGroupedPathNode, movePathNode } from './paths';
+import {
+  parseMapDraft,
+  type MapDraft,
+  type MapEdge,
+  type MapFrame,
+  type MapNode,
+  type Position,
+} from '../map-contract';
+import { containsPosition, segmentMetrics, transitionMetrics } from '../map-geometry';
+import { connectLegacyPathNodes, isGroupedPathNode, movePathNode, movePathNodeV5 } from './paths';
+import type { LayoutAsset } from '../layout-api';
 
 export function emptyDraftV3(venueId = 'demo'): DraftV3 {
   return {
@@ -423,4 +433,495 @@ export function removeFloor(draft: DraftV3, zoneId: string, z: number): DraftV3 
 export function publicationChecks(draft: DraftV3): string[] {
   if (!draft.boundary) return ['Draw the outdoor boundary first'];
   return [];
+}
+
+// ---------------------------------------------------------------------------
+// V5 frame-aware graph operations. The V4 functions above are unchanged; these
+// operate on MapDraft/MapFrame/MapNode with explicit coordinate dispatch.
+// V5 documents are never fed into the V4 canvas: callers must gate on the
+// MAP_V5_AUTHORING_ENABLED capability (see api-v3 isV5AuthoringEnabled).
+// ---------------------------------------------------------------------------
+
+function requireFrameV5(draft: MapDraft, frameId: string): MapFrame {
+  const frame = draft.frames.find((f) => f.id === frameId);
+  if (!frame) throw new Error(`Unknown frame ${frameId}`);
+  return frame;
+}
+
+function requireNodeV5(draft: MapDraft, id: string): MapNode {
+  const node = draft.nodes.find((n) => n.id === id);
+  if (!node) throw new Error(`Unknown node ${id}`);
+  return node;
+}
+
+function nextNodeIdV5(draft: MapDraft): string {
+  let i = 1;
+  const ids = new Set(draft.nodes.map((n) => n.id));
+  while (ids.has(`n-${i}`)) i++;
+  return `n-${i}`;
+}
+
+function nextPlaceIdV5(draft: MapDraft): string {
+  let i = 1;
+  const ids = new Set(draft.places.map((p) => p.id));
+  while (ids.has(`p-${i}`)) i++;
+  return `p-${i}`;
+}
+
+/** Deterministic unique transition id (length-prefixed endpoint tuple). */
+function transitionIdForV5(draft: MapDraft, from: string, to: string): string {
+  const base = `tr-${from.length}-${from}${to}`;
+  if (!draft.transitions.some((t) => t.id === base)) return base;
+  let i = 2;
+  while (draft.transitions.some((t) => t.id === `${base}-${i}`)) i++;
+  return `${base}-${i}`;
+}
+
+function coordKindV5(draft: MapDraft): 'geographic' | 'local' {
+  return draft.canvas.kind === 'static' ? 'local' : 'geographic';
+}
+
+function validatePositionInFrame(draft: MapDraft, frame: MapFrame, position: Position): void {
+  if (position.kind !== coordKindV5(draft)) {
+    throw new Error(`${draft.canvas.kind} canvas needs ${coordKindV5(draft)} positions`);
+  }
+  if (draft.canvas.kind === 'static' && !frame.background) {
+    throw new Error(`Frame ${frame.id} needs an assigned background before authoring`);
+  }
+  if (!containsPosition(frame, position)) throw new Error('Point is outside the frame bounds');
+}
+
+/** Author a node on an explicit frame (same local position on another floor is valid). */
+export function addNodeAtV5(draft: MapDraft, frameId: string, position: Position, name?: string): MapDraft {
+  const frame = requireFrameV5(draft, frameId);
+  validatePositionInFrame(draft, frame, position);
+  const id = nextNodeIdV5(draft);
+  const clean = name?.trim() || `Node ${id}`;
+  if (!clean) throw new Error('Node name is required');
+  return parseMapDraft({
+    ...draft,
+    nodes: [
+      ...draft.nodes,
+      {
+        id,
+        name: clean,
+        frameId: frame.id,
+        position,
+        zoneId: frame.zoneId,
+        z: frame.z,
+        fingerprintRevision: 1,
+        visitorVisible: true,
+      },
+    ],
+  });
+}
+
+type EdgeKindV5 = MapEdge['kind'];
+
+function inferKindV5(from: MapNode, to: MapNode, explicit?: EdgeKindV5): EdgeKindV5 {
+  if (explicit) return explicit;
+  if (from.frameId === to.frameId) return 'path';
+  if ((from.zoneId === null) !== (to.zoneId === null)) return 'entrance';
+  throw new Error('Choose stairs or elevator for connections between floors');
+}
+
+/**
+ * Connect two nodes, creating one complete transaction: transition edges
+ * (entrance/stairs/elevator) also append their mirrored transition record,
+ * so no incomplete transition enters the saved document.
+ */
+export function connectNodesV5(draft: MapDraft, from: string, to: string, kind?: EdgeKindV5, meters?: number): MapDraft {
+  const fromNode = draft.nodes.find((n) => n.id === from);
+  const toNode = draft.nodes.find((n) => n.id === to);
+  if (!fromNode || !toNode) throw new Error('Choose two existing points');
+  if (from === to) throw new Error('Choose two different points');
+  if (draft.edges.some((e) => (e.from === from && e.to === to) || (e.from === to && e.to === from))) {
+    throw new Error('Those points are already connected');
+  }
+  const resolved = inferKindV5(fromNode, toNode, kind);
+  if (resolved === 'path' && fromNode.frameId !== toNode.frameId) {
+    throw new Error('Path connections must stay in the same frame');
+  }
+  if (resolved === 'entrance') {
+    const outdoorIndoor = (fromNode.zoneId === null) !== (toNode.zoneId === null);
+    if (!outdoorIndoor) throw new Error('Entrance connections must join outdoors to a building');
+    const indoor = fromNode.zoneId === null ? toNode : fromNode;
+    if (indoor.z !== 0) throw new Error('Entrances must land on the ground floor');
+  }
+  if (
+    (resolved === 'stairs' || resolved === 'elevator') &&
+    (fromNode.zoneId === null || fromNode.zoneId !== toNode.zoneId || fromNode.z === toNode.z || fromNode.frameId === toNode.frameId)
+  ) {
+    throw new Error('Stairs and elevators must stay within one building across floors');
+  }
+  let edge: MapEdge;
+  if (resolved === 'path') {
+    const frame = requireFrameV5(draft, fromNode.frameId);
+    const m = segmentMetrics(fromNode, toNode, frame);
+    edge = { from, to, kind: 'path', cost: m.cost, ...(m.meters === undefined ? {} : { meters: m.meters }) };
+  } else {
+    const transitionKind = resolved === 'entrance' ? 'entrance' : resolved === 'stairs' ? 'stair' : 'elevator';
+    const m = transitionMetrics(transitionKind, fromNode, toNode, meters);
+    edge = { from, to, kind: resolved, cost: m.cost, ...(m.meters === undefined ? {} : { meters: m.meters }) };
+    const transition = {
+      id: transitionIdForV5(draft, from, to),
+      name: `${resolved} ${from} ↔ ${to}`,
+      kind: transitionKind as 'entrance' | 'stair' | 'elevator',
+      nodeIds: [from, to] as [string, string],
+    };
+    return parseMapDraft({ ...draft, edges: [...draft.edges, edge], transitions: [...draft.transitions, transition] });
+  }
+  return parseMapDraft({ ...draft, edges: [...draft.edges, edge] });
+}
+
+export function disconnectNodesV5(draft: MapDraft, from: string, to: string): MapDraft {
+  const key = (a: string, b: string) => (a < b ? `${a} ${b}` : `${b} ${a}`);
+  const target = key(from, to);
+  if ((draft.paths ?? []).some((path) => path.nodeIds.slice(1).some((id, i) => key(path.nodeIds[i]!, id) === target))) {
+    throw new Error('This connection belongs to a grouped drawn path; delete the drawn path instead.');
+  }
+  return parseMapDraft({
+    ...draft,
+    edges: draft.edges.filter((e) => key(e.from, e.to) !== target),
+    transitions: draft.transitions.filter((t) => key(t.nodeIds[0]!, t.nodeIds[1]!) !== target),
+  });
+}
+
+export function removeNodeV5(draft: MapDraft, id: string): MapDraft {
+  if ((draft.paths ?? []).some((path) => path.nodeIds.includes(id))) {
+    throw new Error('This point is still part of a drawn path; delete its path first.');
+  }
+  const place = draft.places.find((p) => p.nodeId === id);
+  if (place) throw new Error(`Delete the place ${place.name} on this point first`);
+  const anchor = draft.anchors.find((a) => a.nodeId === id);
+  if (anchor) throw new Error(`Delete the anchor ${anchor.label} on this point first`);
+  const transition = draft.transitions.find((item) => item.nodeIds.includes(id));
+  if (transition) throw new Error(`Delete the ${transition.kind} transition ${transition.name} first`);
+  requireNodeV5(draft, id);
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.filter((n) => n.id !== id),
+    edges: draft.edges.filter((e) => e.from !== id && e.to !== id),
+    transitions: draft.transitions.filter((t) => !t.nodeIds.includes(id)),
+  });
+}
+
+/** Places anchor to indoor nodes only. */
+export function addPlaceToNodeV5(draft: MapDraft, nodeId: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Place name is required');
+  const node = requireNodeV5(draft, nodeId);
+  if (node.zoneId === null) throw new Error('Place must be assigned to an indoor node');
+  if (draft.places.some((p) => p.nodeId === nodeId)) throw new Error(`Node ${nodeId} already has a place`);
+  return parseMapDraft({
+    ...draft,
+    places: [...draft.places, { id: nextPlaceIdV5(draft), name: clean, zoneId: node.zoneId, nodeId }],
+  });
+}
+
+/** Rename a V5 node. Names never invalidate fingerprint revisions. */
+export function renameNodeV5(draft: MapDraft, id: string, name: string): MapDraft {
+  requireNodeV5(draft, id);
+  const clean = name.trim();
+  if (!clean) throw new Error('Node name is required');
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.id === id ? { ...n, name: clean } : n)),
+  });
+}
+
+/** Toggle visitor visibility. Visibility never invalidates fingerprint revisions. */
+export function setNodeVisibilityV5(draft: MapDraft, id: string, visitorVisible: boolean): MapDraft {
+  requireNodeV5(draft, id);
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.id === id ? { ...n, visitorVisible } : n)),
+  });
+}
+
+function samePositionV5(a: Position, b: Position): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'geographic' && b.kind === 'geographic') return a.lat === b.lat && a.lng === b.lng;
+  if (a.kind === 'local' && b.kind === 'local') return a.x === b.x && a.y === b.y;
+  return false;
+}
+
+function groupedEdgeKeysV5(draft: MapDraft): Set<string> {
+  const key = (a: string, b: string) => (a < b ? `${a} ${b}` : `${b} ${a}`);
+  return new Set((draft.paths ?? []).flatMap((path) => path.nodeIds.slice(1).map((id, i) => key(path.nodeIds[i]!, id))));
+}
+
+function hasIncidentConnectionV5(draft: MapDraft, id: string): boolean {
+  const grouped = groupedEdgeKeysV5(draft);
+  const key = (a: string, b: string) => (a < b ? `${a} ${b}` : `${b} ${a}`);
+  return draft.edges.some((e) => (e.from === id || e.to === id) && !grouped.has(key(e.from, e.to)));
+}
+
+/**
+ * Move a standalone V5 node within its frame (one transaction, revision bump).
+ * Grouped path nodes rebuild through movePathNodeV5 instead.
+ */
+export function moveNodeV5(draft: MapDraft, id: string, frameId: string, position: Position): MapDraft {
+  if ((draft.paths ?? []).some((path) => path.nodeIds.includes(id))) {
+    return movePathNodeV5(draft, id, frameId, position);
+  }
+  const node = requireNodeV5(draft, id);
+  const frame = requireFrameV5(draft, frameId);
+  if (frame.id !== node.frameId) throw new Error('Moves stay in the same frame; redraw across floors instead.');
+  validatePositionInFrame(draft, frame, position);
+  if (samePositionV5(node.position, position)) return draft;
+  if (hasIncidentConnectionV5(draft, id)) throw new Error('Disconnect or delete connected edges before moving this point.');
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.id === id ? { ...n, position, fingerprintRevision: n.fingerprintRevision + 1 } : n)),
+  });
+}
+
+/**
+ * Conservatively invalidate every node in a frame (background replacement or
+ * calibration change). Callers commit the result through history as one
+ * transaction; Task 6 background assignment uses this after swapping assets.
+ */
+export function invalidateFrameNodesV5(draft: MapDraft, frameId: string): MapDraft {
+  requireFrameV5(draft, frameId);
+  return parseMapDraft({
+    ...draft,
+    nodes: draft.nodes.map((n) => (n.frameId === frameId ? { ...n, fingerprintRevision: n.fingerprintRevision + 1 } : n)),
+  });
+}
+
+/** Delete a path group and only its exclusively-owned generated routing geometry. */
+export function removePathV5(draft: MapDraft, id: string): MapDraft {
+  const path = (draft.paths ?? []).find((item) => item.id === id);
+  if (!path) throw new Error(`Unknown path ${id}`);
+  if (path.kind === 'stair') throw new Error('Delete the stair transition to remove its stair path.');
+  const pathPairs = new Set(path.nodeIds.slice(1).map((nodeId, index) => {
+    const a = path.nodeIds[index]!;
+    return a < nodeId ? `${a}\0${nodeId}` : `${nodeId}\0${a}`;
+  }));
+  const remainingPaths = (draft.paths ?? []).filter((item) => item.id !== id);
+  const otherPathNodes = new Set(remainingPaths.flatMap((item) => item.nodeIds));
+  const remainingPathPairs = new Set(remainingPaths.flatMap((item) => item.nodeIds.slice(1).map((nodeId, index) => {
+    const a = item.nodeIds[index]!;
+    return a < nodeId ? `${a}\0${nodeId}` : `${nodeId}\0${a}`;
+  })));
+  const removable = new Set(path.nodeIds.filter((nodeId) => {
+    const node = draft.nodes.find((item) => item.id === nodeId);
+    if (!node?.generated || otherPathNodes.has(nodeId) || draft.places.some((item) => item.nodeId === nodeId) || draft.anchors.some((item) => item.nodeId === nodeId)) return false;
+    return !draft.edges.some((edge) => (edge.from === nodeId || edge.to === nodeId) && !pathPairs.has(edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`));
+  }));
+  return parseMapDraft({ ...draft, paths: remainingPaths,
+    edges: draft.edges.filter((edge) => {
+      const key = edge.from < edge.to ? `${edge.from}\0${edge.to}` : `${edge.to}\0${edge.from}`;
+      return !pathPairs.has(key) || remainingPathPairs.has(key);
+    }),
+    nodes: draft.nodes.filter((node) => !removable.has(node.id)),
+  });
+}
+
+/** Update the explicit map extent without moving authored geometry. */
+export function setBoundaryV5(draft: MapDraft, bounds: MapDraft['boundary']): MapDraft {
+  if (!bounds) throw new Error('Map boundary is required');
+  const frames = draft.frames.filter((frame) => frame.zoneId === null);
+  const inside = (p: Position) => p.kind === 'geographic' && bounds.kind === 'geographic'
+    ? p.lat >= bounds.south && p.lat <= bounds.north && p.lng >= bounds.west && p.lng <= bounds.east
+    : p.kind === 'local' && bounds.kind === 'local' && p.x >= bounds.left && p.x <= bounds.right && p.y >= bounds.top && p.y <= bounds.bottom;
+  const outsideNodes = draft.nodes.filter((node) => node.zoneId === null && !inside(node.position));
+  if (outsideNodes.length) throw new Error(`Boundary excludes ${outsideNodes.map((node) => node.name).join(', ')}. Move those points first.`);
+  const outsideBuildings = draft.indoorZones.filter((zone) => zone.bounds && (() => {
+    const building = zone.bounds!;
+    if (building.kind !== bounds.kind) return true;
+    if (building.kind === 'geographic' && bounds.kind === 'geographic') return building.north > bounds.north || building.south < bounds.south || building.east > bounds.east || building.west < bounds.west;
+    if (building.kind === 'local' && bounds.kind === 'local') return building.left < bounds.left || building.top < bounds.top || building.right > bounds.right || building.bottom > bounds.bottom;
+    return true;
+  })());
+  if (outsideBuildings.length) throw new Error(`Boundary excludes ${outsideBuildings.map((zone) => zone.name).join(', ')}. Resize those buildings first.`);
+  const frameOutside = (frame: MapFrame) => {
+    if (frame.bounds.kind !== bounds.kind) return true;
+    if (bounds.kind === 'geographic' && frame.bounds.kind === 'geographic') return frame.bounds.north > bounds.north || frame.bounds.south < bounds.south || frame.bounds.east > bounds.east || frame.bounds.west < bounds.west;
+    if (bounds.kind === 'local' && frame.bounds.kind === 'local') return frame.bounds.left < bounds.left || frame.bounds.top < bounds.top || frame.bounds.right > bounds.right || frame.bounds.bottom < bounds.bottom;
+    return true;
+  };
+  if (frames.some(frameOutside)) {
+    throw new Error('Boundary must contain every outdoor frame. Resize those frames first.');
+  }
+  return parseMapDraft({ ...draft, boundary: bounds });
+}
+
+function uniqueV5Id(base: string, ids: string[]): string {
+  if (!ids.includes(base)) return base;
+  for (let n = 2; ; n++) if (!ids.includes(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+/** Add a building and its first floor/frame in one history transaction. */
+export function addBuildingV5(draft: MapDraft, name: string, bounds: MapDraft['boundary']): MapDraft {
+  const clean = name.trim();
+  if (!clean || !bounds) throw new Error('Building name and bounds are required');
+  const contained = (outer: NonNullable<MapDraft['boundary']>, inner: NonNullable<MapDraft['boundary']>) => {
+    if (outer.kind !== inner.kind) return false;
+    if (outer.kind === 'geographic' && inner.kind === 'geographic') return inner.north <= outer.north && inner.south >= outer.south && inner.east <= outer.east && inner.west >= outer.west;
+    if (outer.kind === 'local' && inner.kind === 'local') return inner.left >= outer.left && inner.top >= outer.top && inner.right <= outer.right && inner.bottom <= outer.bottom;
+    return false;
+  };
+  if (draft.boundary && !contained(draft.boundary, bounds)) {
+    throw new Error(`Building ${clean} is outside the map boundary`);
+  }
+  const overlap = (a: NonNullable<MapDraft['boundary']>, b: NonNullable<MapDraft['boundary']>) => {
+    if (a.kind === 'geographic' && b.kind === 'geographic') return a.west < b.east && a.east > b.west && a.south < b.north && a.north > b.south;
+    if (a.kind === 'local' && b.kind === 'local') return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    return false;
+  };
+  if (draft.indoorZones.some((zone) => zone.bounds && overlap(zone.bounds, bounds))) throw new Error(`Building ${clean} overlaps another building`);
+  const slug = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'building';
+  const zoneId = uniqueV5Id(`b-${slug}`, draft.indoorZones.map((zone) => zone.id));
+  const floor = { z: 0, label: 'Ground' };
+  const frameId = uniqueV5Id(`frame-${zoneId}-z0`, draft.frames.map((frame) => frame.id));
+  return parseMapDraft({ ...draft,
+    indoorZones: [...draft.indoorZones, { id: zoneId, name: clean, bounds, floors: [floor] }],
+    frames: [...draft.frames, { id: frameId, zoneId, z: 0, bounds }],
+  });
+}
+
+export function renameBuildingV5(draft: MapDraft, zoneId: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Building name is required');
+  if (!draft.indoorZones.some((zone) => zone.id === zoneId)) throw new Error(`Unknown building ${zoneId}`);
+  return parseMapDraft({ ...draft,
+    indoorZones: draft.indoorZones.map((zone) => zone.id === zoneId ? { ...zone, name: clean } : zone),
+  });
+}
+
+export function addFloorV5(draft: MapDraft, zoneId: string, z: number, label: string): MapDraft {
+  const zone = draft.indoorZones.find((item) => item.id === zoneId);
+  if (!zone) throw new Error(`Unknown building ${zoneId}`);
+  const clean = label.trim();
+  if (!Number.isInteger(z) || !clean) throw new Error('Enter a floor number and label');
+  if (zone.floors.some((floor) => floor.z === z)) throw new Error(`Building ${zone.name} already has floor ${z}`);
+  const bounds = zone.bounds ?? draft.frames.find((frame) => frame.zoneId === zoneId)?.bounds;
+  if (!bounds) throw new Error('Set the building bounds before adding a floor');
+  const frameId = uniqueV5Id(`frame-${zoneId}-z${z}`, draft.frames.map((frame) => frame.id));
+  return parseMapDraft({ ...draft,
+    indoorZones: draft.indoorZones.map((item) => item.id === zoneId ? { ...item, floors: [...item.floors, { z, label: clean }].sort((a, b) => a.z - b.z) } : item),
+    frames: [...draft.frames, { id: frameId, zoneId, z, bounds }],
+  });
+}
+
+export function renameFloorV5(draft: MapDraft, zoneId: string, z: number, label: string): MapDraft {
+  const clean = label.trim();
+  if (!clean) throw new Error('Floor label is required');
+  const zone = draft.indoorZones.find((item) => item.id === zoneId);
+  if (!zone?.floors.some((floor) => floor.z === z)) throw new Error(`Unknown floor ${z}`);
+  return parseMapDraft({ ...draft, indoorZones: draft.indoorZones.map((item) => item.id === zoneId
+    ? { ...item, floors: item.floors.map((floor) => floor.z === z ? { ...floor, label: clean } : floor) } : item) });
+}
+
+export function removeFloorV5(draft: MapDraft, zoneId: string, z: number): MapDraft {
+  const zone = draft.indoorZones.find((item) => item.id === zoneId);
+  if (!zone?.floors.some((floor) => floor.z === z)) throw new Error(`Unknown floor ${z}`);
+  if (zone.floors.length < 2) throw new Error(`Building ${zone.name} needs at least one floor`);
+  const frame = draft.frames.find((item) => item.zoneId === zoneId && item.z === z);
+  if (frame && draft.nodes.some((node) => node.frameId === frame.id)) throw new Error(`Floor ${z} still has nodes. Move or delete them first.`);
+  if (frame && draft.transitions.some((transition) => transition.nodeIds.some((id) => draft.nodes.find((node) => node.id === id)?.frameId === frame.id))) throw new Error(`Floor ${z} is used by a transition.`);
+  return parseMapDraft({ ...draft,
+    indoorZones: draft.indoorZones.map((item) => item.id === zoneId ? { ...item, floors: item.floors.filter((floor) => floor.z !== z) } : item),
+    frames: draft.frames.filter((item) => item.id !== frame?.id),
+  });
+}
+
+export function renamePathV5(draft: MapDraft, id: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Path name is required');
+  if (!(draft.paths ?? []).some((path) => path.id === id)) throw new Error(`Unknown path ${id}`);
+  return parseMapDraft({ ...draft, paths: draft.paths?.map((path) => path.id === id ? { ...path, name: clean } : path) });
+}
+
+export function renameTransitionV5(draft: MapDraft, id: string, name: string): MapDraft {
+  const clean = name.trim();
+  if (!clean) throw new Error('Transition name is required');
+  if (!draft.transitions.some((transition) => transition.id === id)) throw new Error(`Unknown transition ${id}`);
+  return parseMapDraft({ ...draft, transitions: draft.transitions.map((transition) => transition.id === id ? { ...transition, name: clean } : transition) });
+}
+
+export function editPlaceV5(draft: MapDraft, id: string, updates: { name: string; nodeId: string }): MapDraft {
+  const place = draft.places.find((item) => item.id === id);
+  if (!place) throw new Error(`Unknown place ${id}`);
+  const node = requireNodeV5(draft, updates.nodeId);
+  const name = updates.name.trim();
+  if (!name) throw new Error('Place name is required');
+  if (!node.zoneId) throw new Error('Place must be assigned to an indoor node');
+  if (draft.places.some((item) => item.id !== id && item.nodeId === node.id)) throw new Error(`Node ${node.name} already has a place`);
+  return parseMapDraft({ ...draft, places: draft.places.map((item) => item.id === id ? { ...item, name, nodeId: node.id, zoneId: node.zoneId! } : item) });
+}
+
+export function removePlaceV5(draft: MapDraft, id: string): MapDraft {
+  if (!draft.places.some((item) => item.id === id)) throw new Error(`Unknown place ${id}`);
+  return parseMapDraft({ ...draft, places: draft.places.filter((item) => item.id !== id) });
+}
+
+/** Assign or replace a frame image without moving normalized node positions. */
+export function assignBackground(draft: MapDraft, frameId: string, asset: LayoutAsset): MapDraft {
+  if (draft.canvas.kind !== 'static') throw new Error('Layout backgrounds require a static map');
+  const frame = requireFrameV5(draft, frameId);
+  const nodeById = new Map(draft.nodes.map((node) => [node.id, node]));
+  const assigned = {
+    ...draft,
+    frames: draft.frames.map((item) => item.id === frameId
+      ? { ...item, background: { ...asset }, calibration: undefined }
+      : item),
+    edges: draft.edges.map((edge) => {
+      const from = nodeById.get(edge.from);
+      const to = nodeById.get(edge.to);
+      if (!from || !to || from.frameId !== frameId || to.frameId !== frameId) return edge;
+      const withoutOldScale = { ...edge };
+      delete withoutOldScale.meters;
+      return withoutOldScale;
+    }),
+  };
+  return invalidateFrameNodesV5(assigned, frame.id);
+}
+
+/** Recalibrate one frame; topology and dimensionless routing weights stay unchanged. */
+export function calibrateFrame(
+  draft: MapDraft,
+  frameId: string,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  meters: number,
+): MapDraft {
+  if (draft.canvas.kind !== 'static') throw new Error('Scale calibration requires a static map');
+  const frame = requireFrameV5(draft, frameId);
+  if (!frame.background) throw new Error(`Frame ${frame.id} needs an assigned background before calibration`);
+  if (![a.x, a.y, b.x, b.y].every((coordinate) => Number.isFinite(coordinate) && coordinate >= 0 && coordinate <= 1)) {
+    throw new Error('Choose two distinct points and a positive distance');
+  }
+  const pixelDistance = Math.hypot(
+    (b.x - a.x) * frame.background.width,
+    (b.y - a.y) * frame.background.height,
+  );
+  if (!(meters > 0 && Number.isFinite(meters)) || pixelDistance === 0 || !Number.isFinite(pixelDistance)) {
+    throw new Error('Choose two distinct points and a positive distance');
+  }
+  const metersPerPixel = meters / pixelDistance;
+  if (!(metersPerPixel > 0 && Number.isFinite(metersPerPixel))) {
+    throw new Error('Choose two distinct points and a positive distance');
+  }
+  const nodes = new Map(draft.nodes.map((node) => [node.id, node]));
+  const calibrated = parseMapDraft({
+    ...draft,
+    frames: draft.frames.map((item) => item.id === frameId ? { ...item, calibration: { metersPerPixel } } : item),
+    edges: draft.edges.map((edge) => {
+      const from = nodes.get(edge.from);
+      const to = nodes.get(edge.to);
+      if (!from || !to || from.frameId !== frameId || to.frameId !== frameId) return edge;
+      const distance = Math.hypot(
+        ((to.position as { x: number; y: number }).x - (from.position as { x: number; y: number }).x) * frame.background!.width,
+        ((to.position as { x: number; y: number }).y - (from.position as { x: number; y: number }).y) * frame.background!.height,
+      ) * metersPerPixel;
+      if (Number.isFinite(distance) && distance > 0) return { ...edge, meters: distance };
+      const withoutStaleMeasure = { ...edge };
+      delete withoutStaleMeasure.meters;
+      return withoutStaleMeasure;
+    }),
+  });
+  return invalidateFrameNodesV5(calibrated, frameId);
 }

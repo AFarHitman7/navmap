@@ -11,6 +11,7 @@ Bring up backend + web locally, verify them, and report mobile status.
 1. Checks:
    - `node --version`, `npm --version`.
    - `navmap-backend/.env` and `navmap-web/.env` exist; if not, stop and say `setup.md` must be run first.
+   - `navmap-backend/.env` sets `MAP_V5_AUTHORING_ENABLED=1` when the V5 (named geographic/static) editor is needed; without it the organizer shows V5 read-only and routes V4 maps to the legacy editor. The server reports the flag at `GET /api/capabilities` (`{mapV5AuthoringEnabled}`).
 2. Start backend in background:
    - `cd navmap-backend && npm run dev` (uses `HOST`/`PORT` from `.env`, default `http://127.0.0.1:3000`).
    - Verify `GET /api/venues/demo/latest` returns 200 with `{venueId, version}` or 404 `{error:no published version}`. 404 before first publish is normal.
@@ -24,3 +25,19 @@ Bring up backend + web locally, verify them, and report mobile status.
 ## Done check
 
 Report backend URL + `/latest` response, web URL + page state, mobile device status, and PIDs or terminals left running.
+
+## V5 acceptance evidence
+
+- Web: `npm test`, `npm run typecheck`, `npm run lint`, `npm run build`,
+  `npm run e2e` (desktop + mobile projects) from `navmap-web/`.
+- Backend: `npm test`, `npm run typecheck`, `npm run build` from
+  `navmap-backend/`.
+- Mobile: `npm test -- --runInBand`, `npm run typecheck` from
+  `navmap-mobile/`.
+- Record per-package exit/output evidence in
+  `docs/map-authoring-acceptance.md`. Physical-device checks that cannot
+  run are marked "Not run", never "Passed".
+- E2E fixtures (`legacy-v4`, `geo-v5`, `static-two-floor`) live in
+  `navmap-backend/scripts/e2e-server.ts` and use disposable temp storage,
+  never development data. Release order and limits:
+  `docs/map-schema-v5-rollout.md`.

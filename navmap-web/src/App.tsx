@@ -1,10 +1,16 @@
-import { Link, NavLink, Outlet, RouterProvider, createBrowserRouter, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, RouterProvider, createBrowserRouter, useOutletContext, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { Icon } from './editor/Icon';
 import { OrganizerV3 } from './OrganizerV3';
+import { OrganizerV5 } from './OrganizerV5';
 import { VisitorV3 } from './VisitorV3';
+import { getDraftVersion } from './api-v3';
+import { resolveEditorRoute } from './editor-route';
+import { MapPicker } from './maps/MapPicker';
 
 function Layout() {
   const { venueId = 'demo' } = useParams();
+  const [mapName, setMapName] = useState('');
   return (
     <div className="app">
       <header className="app-header">
@@ -20,10 +26,11 @@ function Layout() {
           <NavLink to={venueId === 'demo' ? '/' : `/editor/${encodeURIComponent(venueId)}`} end>Editor</NavLink>
           <NavLink to={`/v/${encodeURIComponent(venueId)}`}>Visitor</NavLink>
         </nav>
+        <MapPicker currentId={venueId} onCurrentNameChange={setMapName} />
         <span className="header-caption">VENUE WAYFINDING</span>
       </header>
       <main>
-        <Outlet />
+        <Outlet context={{ mapName }} />
       </main>
     </div>
   );
@@ -31,7 +38,19 @@ function Layout() {
 
 function VenueEditorRoute() {
   const { venueId = 'demo' } = useParams();
-  return <OrganizerV3 key={`v3:${venueId}`} venueId={venueId} />;
+  const { mapName } = useOutletContext<{ mapName: string }>();
+  const [route, setRoute] = useState<'loading' | 'legacy' | 'v5'>('loading');
+  useEffect(() => {
+    let live = true;
+    void getDraftVersion(venueId).then((version) => {
+      if (live) setRoute(resolveEditorRoute(version));
+    }, () => { if (live) setRoute('legacy'); });
+    return () => { live = false; };
+  }, [venueId]);
+  if (route === 'loading') return <section className="page-state" role="status"><h1>Opening map</h1><span className="loading-dot" /></section>;
+  return route === 'v5'
+    ? <OrganizerV5 key={`v5:${venueId}`} venueId={venueId} mapName={mapName} />
+    : <OrganizerV3 key={`v3:${venueId}`} venueId={venueId} />;
 }
 
 function VenueVisitorRoute() {
@@ -44,7 +63,7 @@ const router = createBrowserRouter([
     path: '/',
     element: <Layout />,
     children: [
-      { index: true, element: <OrganizerV3 key="v3:demo" venueId="demo" /> },
+      { index: true, element: <VenueEditorRoute /> },
       { path: 'editor/:venueId', element: <VenueEditorRoute /> },
       { path: 'v/:venueId', element: <VenueVisitorRoute /> },
       { path: '*', element: <p>Unknown page. Open the V3 editor.</p> },

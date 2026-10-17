@@ -71,6 +71,15 @@ describe('MapCanvasV3', () => {
     expect(map.getAttribute('data-ready')).toBe('true');
   });
 
+  it('allows geographic editor zoom 24 while keeping native OSM raster requests at z19', async () => {
+    const leaflet = captureLeaflet();
+    const tileSpy = vi.spyOn(L, 'tileLayer');
+    render(<MapCanvasV3 draft={fixture as never} selectedZoneId={null} />);
+    await screen.findByTestId('leaflet-map-v3');
+    expect(leaflet.maps[0]!.options.maxZoom).toBe(24);
+    expect(tileSpy).toHaveBeenCalledWith('https://tile.openstreetmap.org/{z}/{x}/{y}.png', expect.objectContaining({ maxZoom: 24, maxNativeZoom: 19 }));
+  });
+
   it('dims nodes that are not on the filtered floor', async () => {
     render(
       <MapCanvasV3
@@ -278,6 +287,8 @@ describe('MapCanvasV3', () => {
     await screen.findByTestId('leaflet-map-v3');
 
     const landing = leaflet.markers.find((item) => item.options.title === 'Building A ground lobby');
+    expect(leaflet.markers.find((item) => item.options.title === 'Path point n-gen')).toBeUndefined();
+    render(<MapCanvasV3 draft={draft as never} selectedZoneId={null} showReferencePoints />);
     const generated = leaflet.markers.find((item) => item.options.title === 'Path point n-gen');
     expect(landing).toBeDefined();
     expect(generated).toBeDefined();

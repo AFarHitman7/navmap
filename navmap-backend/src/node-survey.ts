@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { BSSID_RE, loadDraftV3Json, normalizeBssid, parseDraftV3, type NodeProfileV3 } from './draft.js';
+import { BSSID_RE, draftSchemaVersion, getRevisionHighWater, loadDraftV3Json, normalizeBssid, parseDraftV3, type NodeProfileV3 } from './draft.js';
+import { parseMapDraft } from './map-contract.js';
 import { normalizeVenueId } from './venue-id.js';
 
 function median(xs: number[]): number {
@@ -37,10 +38,17 @@ function sanitizeBssid(raw: string): string {
   return bssid;
 }
 
-function loadV3Draft(db: DatabaseSync, venueId: string) {
+/** Draft node reference (V4 or V5): id plus current fingerprint revision. */
+type DraftNodeRef = { id: string; fingerprintRevision: number };
+
+function loadDraftNodeRefs(db: DatabaseSync, venueId: string): Map<string, DraftNodeRef> {
   const raw = loadDraftV3Json(db, venueId);
   if (!raw) throw Object.assign(new Error(`no v3 draft for venue ${venueId}`), { statusCode: 404 });
-  return parseDraftV3(JSON.parse(raw));
+  const json = JSON.parse(raw);
+  // V5 drafts dispatch to the frame-aware contract; V4 keeps the legacy path.
+  const nodes: DraftNodeRef[] =
+    draftSchemaVersion(json) === 5 ? parseMapDraft(json).nodes : parseDraftV3(json).nodes;
+  return new Map(nodes.map((n) => [n.id, { id: n.id, fingerprintRevision: n.fingerprintRevision }]));
 }
 
 export function loadNodeSamples(
@@ -84,48 +92,62 @@ export function addNodeSamples(
 ): number {
   normalizeVenueId(venueId);
   if (scans.length > 20) throw Object.assign(new Error('at most 20 scans per request'), { statusCode: 400 });
-  const draft = loadV3Draft(db, venueId);
-  const node = draft.nodes.find((n) => n.id === nodeId);
-  if (!node) throw Object.assign(new Error(`unknown node: ${nodeId}`), { statusCode: 400 });
-  const seen = new Set<number>();
-  const normalized = scans.map((scan) => {
-    const parsed = nodeScanSchema.parse({ ...scan, nodeId });
-    if (parsed.nodeId !== nodeId) {
-      throw Object.assign(new Error('scan nodeId must match request nodeId'), { statusCode: 400 });
-    }
-    if (parsed.fingerprintRevision !== node.fingerprintRevision) {
-      throw Object.assign(
-        new Error(`stale fingerprint revision: scan ${parsed.fingerprintRevision}, node ${node.fingerprintRevision}`),
-        { statusCode: 400 },
-      );
-    }
-    if (seen.has(parsed.capturedAt)) {
-      throw Object.assign(new Error(`duplicate capturedAt in request: ${parsed.capturedAt}`), { statusCode: 400 });
-    }
-    seen.add(parsed.capturedAt);
-    const existing = db
-      .prepare(
-        'SELECT captured_at FROM node_samples WHERE venue_id = ? AND node_id = ? AND fingerprint_revision = ? AND captured_at = ?',
-      )
-      .get(venueId, nodeId, parsed.fingerprintRevision, parsed.capturedAt) as
-      | { captured_at: number }
-      | undefined;
-    if (existing) {
-      throw Object.assign(new Error(`duplicate scan timestamp: ${parsed.capturedAt}`), { statusCode: 400 });
-    }
-    return {
-      ...parsed,
-      readings: parsed.readings.map((r) => ({ bssid: sanitizeBssid(r.bssid), rssi: r.rssi })),
-    };
-  });
-  db.exec('BEGIN');
+  // One write transaction spans validation reads and inserts: a concurrent
+  // geometry save cannot commit between the revision check and the insert.
+  // BEGIN IMMEDIATE (with busy_timeout from openDb) serializes against
+  // updateDraftV3/V5 saves on other connections instead of interleaving.
+  db.exec('BEGIN IMMEDIATE');
   try {
+    const node = loadDraftNodeRefs(db, venueId).get(nodeId);
+    if (!node) throw Object.assign(new Error(`unknown node: ${nodeId}`), { statusCode: 400 });
+    const highWater = getRevisionHighWater(db, venueId).get(nodeId);
+    const stale = (revision: number) =>
+      Object.assign(new Error(`stale fingerprint revision: scan ${revision}, node ${node.fingerprintRevision}`), {
+        statusCode: 409,
+        code: 'revision_conflict',
+        nodeIds: [nodeId],
+        currentRevisions: { [nodeId]: Math.max(node.fingerprintRevision, highWater ?? node.fingerprintRevision) },
+      });
+    const seen = new Set<number>();
+    const normalized = scans.map((scan) => {
+      const parsed = nodeScanSchema.parse({ ...scan, nodeId });
+      if (parsed.nodeId !== nodeId) {
+        throw Object.assign(new Error('scan nodeId must match request nodeId'), { statusCode: 400 });
+      }
+      if (parsed.fingerprintRevision !== node.fingerprintRevision) {
+        throw stale(parsed.fingerprintRevision);
+      }
+      // The durable high-water mark outlives node deletion: reusing a token at
+      // or below it can never silently reactivate historical samples.
+      if (highWater !== undefined && parsed.fingerprintRevision < highWater) {
+        throw stale(parsed.fingerprintRevision);
+      }
+      if (seen.has(parsed.capturedAt)) {
+        throw Object.assign(new Error(`duplicate capturedAt in request: ${parsed.capturedAt}`), { statusCode: 400 });
+      }
+      seen.add(parsed.capturedAt);
+      const existing = db
+        .prepare(
+          'SELECT captured_at FROM node_samples WHERE venue_id = ? AND node_id = ? AND fingerprint_revision = ? AND captured_at = ?',
+        )
+        .get(venueId, nodeId, parsed.fingerprintRevision, parsed.capturedAt) as
+        | { captured_at: number }
+        | undefined;
+      if (existing) {
+        throw Object.assign(new Error(`duplicate scan timestamp: ${parsed.capturedAt}`), { statusCode: 400 });
+      }
+      return {
+        ...parsed,
+        readings: parsed.readings.map((r) => ({ bssid: sanitizeBssid(r.bssid), rssi: r.rssi })),
+      };
+    });
     for (const s of normalized) {
       db.prepare(
         'INSERT INTO node_samples (venue_id, node_id, fingerprint_revision, captured_at, readings_json) VALUES (?, ?, ?, ?, ?)',
       ).run(venueId, nodeId, s.fingerprintRevision, s.capturedAt, JSON.stringify(s.readings));
     }
     db.exec('COMMIT');
+    return normalized.length;
   } catch (err) {
     try {
       db.exec('ROLLBACK');
@@ -134,7 +156,6 @@ export function addNodeSamples(
     }
     throw err;
   }
-  return normalized.length;
 }
 
 export function buildNodeProfiles(scans: NodeScan[], allowlist: string[]): NodeProfileV3[] {

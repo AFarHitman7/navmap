@@ -32,3 +32,13 @@ export function resolveDataPaths(): { dataDir: string; dbPath: string } {
   const dbPath = process.env.DB_PATH ?? path.join(dataDir, 'navmap.db');
   return { dataDir, dbPath };
 }
+
+/**
+ * Reader-first rollout gate (ruling 9): V5 authoring is disabled unless the
+ * operator explicitly enables it. Tests enable it per-case via
+ * `MAP_V5_AUTHORING_ENABLED=1`; it defaults to false everywhere else.
+ */
+export function isV5AuthoringEnabled(): boolean {
+  const value = process.env.MAP_V5_AUTHORING_ENABLED;
+  return value === '1' || value === 'true';
+}

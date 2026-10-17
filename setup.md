@@ -15,7 +15,7 @@ Set up all three repos from a clean checkout so `run.md` can start them. Do not 
 1. Backend:
    - `cd navmap-backend`
    - `npm ci`
-   - Copy `.env.example` to `.env` if missing. Set `ADMIN_PASSWORD` to a fresh dev password, `DATA_DIR=./data`, `HOST=0.0.0.0`, `PORT=3000`.
+   - Copy `.env.example` to `.env` if missing. Set `ADMIN_PASSWORD` to a fresh dev password, `DATA_DIR=./data`, `HOST=0.0.0.0`, `PORT=3000`, and `MAP_V5_AUTHORING_ENABLED=1` to enable V5 map authoring locally (the new named geographic/static editor). Leave the flag unset for a reader-only server: the V5 editor is read-only and V4 maps fall back to the legacy editor.
    - `npm run db:init` — expect `data/navmap.db` and `data/uploads/`.
    - `npm test`, `npm run typecheck`, `npm run build` — all must exit 0.
 2. Web:

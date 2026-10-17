@@ -1,9 +1,12 @@
 import type { ManifestV3 } from './contract-v3';
+import type { MapManifest } from './map-contract';
+
+type AnchorManifest = Pick<ManifestV3, 'venueId' | 'version' | 'anchors'> | Pick<MapManifest, 'venueId' | 'version' | 'anchors'>;
 
 /** Resolve navmap://anchor/<venue>/<version>/<anchor> against a saved pack. */
 export function parseAnchorUrl(
   url: string,
-  manifest: ManifestV3,
+  manifest: AnchorManifest,
 ): { nodeId: string; version: number } | null {
   const m = /^navmap:\/\/anchor\/([^/]+)\/(\d+)\/([^/]+)$/.exec(url.trim());
   if (!m) return null;
@@ -21,7 +24,7 @@ export function parseAnchorUrl(
  */
 export function handleAnchorUrl(
   url: string,
-  active: ManifestV3,
+  active: AnchorManifest,
   lastHandledUrl: string | null,
 ): { nodeId: string } | null {
   if (url === lastHandledUrl) return null;

@@ -27,8 +27,13 @@ const V4_MANIFEST: ManifestV3 = {
 
 function memoryAdapter(getManifest: (version: number) => unknown): PackAdapter & { files: Map<string, string> } {
   const files = new Map<string, string>();
+  const bytes = new Map<string, Uint8Array>();
   return {
     files,
+    getBytes: async () => { throw new Error('unexpected asset request'); },
+    writeBytes: async (path: string, data: Uint8Array) => { bytes.set(path, data); },
+    readBytes: async (path: string) => { const value = bytes.get(path); if (!value) throw new Error(`ENOENT ${path}`); return value; },
+    hashBytes: async () => '0'.repeat(64),
     getJson: async (url: string) => {
       if (url.endsWith('/latest')) return { version: 1 };
       const m = /\/versions\/(\d+)\/manifest/.exec(url);
@@ -80,10 +85,10 @@ test('corrupt v4 manifest keeps the old active version', async () => {
   expect(JSON.parse(adapter.files.get('packs/demo/active.json')!)).toEqual({ activeVersion: 1 });
 });
 
-test.each([1, 2])('a saved schema V%s pack is rejected and removed from local storage', async (schemaVersion) => {
+test.each([1, 2])('a saved unsupported schema V%s pack is rejected without deleting local data', async (schemaVersion) => {
   const adapter = memoryAdapter(() => ({ schemaVersion }));
   adapter.files.set('packs/demo/active.json', JSON.stringify({ activeVersion: 1 }));
   adapter.files.set('packs/demo/1/manifest.json', JSON.stringify({ schemaVersion }));
-  await expect(loadActivePack('demo', adapter)).resolves.toBeNull();
-  expect(adapter.files.has('packs/demo/active.json')).toBe(false);
+  await expect(loadActivePack('demo', adapter)).rejects.toThrow(/unsupported|manifest/i);
+  expect(adapter.files.has('packs/demo/active.json')).toBe(true);
 });

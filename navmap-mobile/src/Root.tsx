@@ -5,6 +5,7 @@ import { apiBaseUrl, venueId as defaultVenueId } from './config';
 import {
   downloadPack,
   loadActivePack,
+  type AnyManifest,
   type PackAdapter,
 } from './pack';
 import { memoryTokenStore, type HttpPost, type TokenStore } from './api';
@@ -12,6 +13,7 @@ import { canRequestScan, SCAN_COOLDOWN_MS, type WifiScanResults } from './scan';
 import { onScanResults as defaultOnScanResults, requestScan as defaultRequestScan, scanAnchor as defaultScanAnchor } from './native';
 import { fsPackAdapter, keychainTokenStore } from './storage';
 import type { ManifestV3 } from './contract-v3';
+import type { MapManifest } from './map-contract';
 import { classifyGpsZone, matchNode, resolveLocation, type LocationState } from './positioning-v3';
 import { SurveyScreen } from './SurveyScreen';
 import { VisitorScreen } from './VisitorScreen';
@@ -21,7 +23,7 @@ type GpsFix = { lat: number; lon: number; accuracy: number; seenAt: number };
 
 export type RootDeps = {
   venueId?: string;
-  initialManifest?: ManifestV3 | null;
+  initialManifest?: AnyManifest | null;
   packAdapter?: PackAdapter;
   httpPost?: HttpPost;
   tokenStore?: TokenStore;
@@ -100,7 +102,7 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
   const scanAnchorFn = deps.scanAnchorFn ?? defaultScanAnchor;
   const getGps = deps.getGps ?? defaultGetGps;
 
-  const [manifest, setManifest] = React.useState<ManifestV3 | null>(deps.initialManifest ?? null);
+  const [manifest, setManifest] = React.useState<AnyManifest | null>(deps.initialManifest ?? null);
   const [packStatus, setPackStatus] = React.useState(deps.initialManifest ? 'ready' : 'idle');
   const [packMessage, setPackMessage] = React.useState<string | null>(null);
   const [gps, setGps] = React.useState<GpsFix | null>(null);
@@ -241,14 +243,27 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
   };
 
   const onRefreshGps = () => {
+    // Static mode never requests geolocation: GPS cannot classify floor plans.
+    if (manifest !== null && (manifest as MapManifest).schemaVersion === 5 && (manifest as MapManifest).canvas.kind === 'static') {
+      return;
+    }
     void getGps().then((fix) => {
       if (fix) setGps(fix);
     });
   };
 
-  const manifestV3: ManifestV3 | null = manifest;
+  const manifestV3: AnyManifest | null = manifest;
+  const manifestCanvas = manifest !== null && (manifest as MapManifest).schemaVersion === 5
+    ? (manifest as MapManifest).canvas
+    : undefined;
+  const isStaticCanvas = manifestCanvas?.kind === 'static';
+  // Static mode disables GPS watching/classification: drop any retained fix
+  // so an uploaded floor plan never shows geographic evidence.
+  React.useEffect(() => {
+    if (isStaticCanvas) setGps(null);
+  }, [isStaticCanvas]);
   const gpsZone = manifestV3 && gps
-    ? classifyGpsZone({ boundary: manifestV3.boundary, indoorZones: manifestV3.indoorZones }, gps.lat, gps.lon)
+    ? classifyGpsZone({ boundary: manifestV3.boundary, indoorZones: manifestV3.indoorZones, canvas: manifestCanvas }, gps.lat, gps.lon)
     : null;
   let v3Location: LocationState | null = null;
   if (manifestV3) {
@@ -301,9 +316,11 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
             lastRequestAt={lastRequestAt} now={now} throttleMessage={throttleMessage}
             onRequestScan={onRequestScan} httpPost={httpPost} tokenStore={tokenStore}
             onSaved={() => undefined} draft={manifestV3} venueId={venueId}
+            packAdapter={adapter}
           /> : null}
           <VisitorScreen
             manifest={manifest}
+            packAdapter={adapter}
             qrNodeId={qrNodeId}
             manualNodeId={manualNodeId}
             destinationId={destinationId}
@@ -312,6 +329,7 @@ export function Root(deps: RootDeps = {}): React.JSX.Element {
             v3Location={v3Location}
             v3NodeId={v3NodeId}
             v3ZoneId={v3ZoneId}
+            gpsFix={isStaticCanvas ? null : gps}
             onResumeAuto={resumeAuto}
           />
         </>

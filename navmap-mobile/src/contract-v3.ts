@@ -1,5 +1,9 @@
 // v3 unified geographic contract (mirrors backend draftV3Schema, no shared package).
 //
+// LEGACY V4 contract: preserved as-is for existing readers. New saves use the
+// explicit V5 geographic/static contract in ./map-contract.ts; V4 documents
+// upgrade to V5 in memory only (see upgradeV4Draft/upgradeV4Manifest).
+//
 // NOTE: navmap-mobile has no zod dependency, so this module hand-rolls the
 // same structural checks as the backend zod schemas in
 // navmap-backend/src/draft.ts (draftV3Schema). Field names, ranges, strict
@@ -46,7 +50,7 @@ export type ManifestV3 = Omit<DraftV3, 'boundary'> & {
   profiles: NodeProfileV3[];
 };
 
-const VENUE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+export const VENUE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const EDGE_KINDS = ['path', 'entrance', 'stairs', 'elevator'] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -249,6 +253,23 @@ export function parseDraftV3(raw: unknown): DraftV3 {
 }
 
 const MANIFEST_KEYS = [...DRAFT_KEYS, 'version', 'profiles'] as const;
+
+function schemaVersionOf(raw: unknown): number | undefined {
+  if (!isRecord(raw) || typeof raw.schemaVersion !== 'number') return undefined;
+  return raw.schemaVersion;
+}
+
+/**
+ * Reader dispatch for mixed V4/V5 storage: V4 documents keep the legacy
+ * readers; V5 documents upgrade in memory only (see map-contract.ts).
+ * Never feed a V5 document into a V4 canvas.
+ */
+export function detectContractKind(raw: unknown): 'v4' | 'v5' | 'unknown' {
+  const version = schemaVersionOf(raw);
+  if (version === 4) return 'v4';
+  if (version === 5) return 'v5';
+  return 'unknown';
+}
 
 export function parseManifestV3(raw: unknown): ManifestV3 {
   if (!isRecord(raw)) fail('not an object');

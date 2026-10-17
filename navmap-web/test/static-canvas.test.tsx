@@ -1,0 +1,121 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import L from 'leaflet';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CanvasHost } from '../src/map/CanvasHost';
+import { fromLeaflet, toLeaflet } from '../src/map/static-coordinates';
+import { staticDraft } from '../src/fixtures/map-v5';
+import { StaticCanvas } from '../src/map/StaticCanvas';
+
+describe('static canvas coordinate and lifecycle contract', () => {
+  it.each([
+    [{ x: 0, y: 0 }, 1000, 500, [500, 0]],
+    [{ x: 1, y: 1 }, 1000, 500, [0, 1000]],
+    [{ x: 0.5, y: 0.5 }, 320, 900, [450, 160]],
+  ] as const)('round-trips top-left normalized positions %#', (position, width, height, expected) => {
+    expect(toLeaflet(position, width, height)).toEqual(expected);
+    expect(fromLeaflet(expected[0], expected[1], width, height)).toEqual({ kind: 'local', ...position });
+  });
+
+  it('uses CRS.Simple and one assigned frame overlay without tile requests', async () => {
+    const draft = staticDraft();
+    const mapSpy = vi.spyOn(L, 'map');
+    const tileSpy = vi.spyOn(L, 'tileLayer');
+    const imageSpy = vi.spyOn(L, 'imageOverlay');
+    const callbacks = { onPointClick: vi.fn() };
+    const { container, rerender } = render(<CanvasHost document={draft} view="editor" activeFrameId={draft.frames[0]!.id} mode="place-node" callbacks={callbacks} />);
+    await waitFor(() => expect(imageSpy).toHaveBeenCalledTimes(1));
+    expect(mapSpy.mock.calls[0]?.[1]).toMatchObject({ crs: L.CRS.Simple });
+    expect(tileSpy).not.toHaveBeenCalled();
+    const otherFrame = draft.frames[1]!;
+    rerender(<CanvasHost document={draft} view="editor" activeFrameId={otherFrame.id} mode="place-node" callbacks={callbacks} />);
+    await waitFor(() => expect(imageSpy).toHaveBeenCalledTimes(2));
+    expect(callbacks.onPointClick).not.toHaveBeenCalled();
+    fireEvent.click(container.querySelector('.leaflet-container')!, { detail: 1 });
+    expect(callbacks.onPointClick).toHaveBeenCalledWith(expect.objectContaining({ kind: 'local' }), otherFrame.id);
+  });
+
+  it('draws one selectable path polyline per frame stretch and hides sample markers by default', async () => {
+    const draft = staticDraft();
+    const polylines = vi.spyOn(L, 'polyline');
+    const markers = vi.spyOn(L, 'marker');
+    polylines.mockClear(); markers.mockClear();
+    const callbacks = { onPathClick: vi.fn(), onEdgeClick: vi.fn() };
+    render(<CanvasHost document={draft} view="editor" activeFrameId="frame-b-a-z0" mode="select" callbacks={callbacks} />);
+    await waitFor(() => expect(polylines).toHaveBeenCalled());
+    expect(polylines).toHaveBeenCalledTimes(1);
+    expect(polylines.mock.calls[0]?.[0]).toHaveLength(3);
+    expect(markers.mock.calls.some(([point]) => Array.isArray(point) && point[0] === 400 && point[1] === 460)).toBe(false);
+    const pathLine = polylines.mock.results[0]?.value;
+    pathLine?.fire('click', { originalEvent: { stopPropagation: vi.fn() } });
+    expect(callbacks.onPathClick).toHaveBeenCalledWith('corr-ground');
+  });
+
+  it('does not render any path lines or editor handles in visitor view', async () => {
+    const polylines = vi.spyOn(L, 'polyline');
+    polylines.mockClear();
+    const imageSpy = vi.spyOn(L, 'imageOverlay');
+    imageSpy.mockClear();
+    const draft = staticDraft();
+    render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(imageSpy).toHaveBeenCalled());
+    expect(polylines).not.toHaveBeenCalled();
+  });
+
+  it('hides visitor stair badges even when both landings are visible', async () => {
+    const base = staticDraft();
+    const draft = {
+      ...base,
+      indoorZones: base.indoorZones.map((zone) => ({ ...zone, name: 'Restricted wing', floors: zone.floors.map((floor) => floor.z === 1 ? { ...floor, label: 'Secret level' } : floor) })),
+      nodes: base.nodes.map((node) => node.id === 's-a1' ? { ...node, name: 'Secret landing', visitorVisible: false } : node),
+    };
+    const markers = vi.spyOn(L, 'marker');
+    markers.mockClear();
+    const makeCanvas = (document: typeof draft, view: 'editor' | 'visitor') => render(<CanvasHost document={document} view={view} activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    const editor = makeCanvas(draft, 'editor');
+    await waitFor(() => expect(editor.container.querySelector('.v5-transition-badge span')).not.toBeNull());
+    expect(editor.container.querySelector('.v5-transition-badge span')?.textContent).toContain('Restricted wing floor 1');
+    editor.unmount();
+
+    markers.mockClear();
+    const first = makeCanvas(draft, 'visitor');
+    await waitFor(() => expect(markers).toHaveBeenCalled());
+    expect(first.container.querySelector('.v5-transition-badge')).toBeNull();
+    expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
+    first.unmount();
+
+    markers.mockClear();
+    const hidden = { ...draft, nodes: draft.nodes.map((node) => node.id === 's-a0' || node.id === 's-a1' ? { ...node, visitorVisible: false } : node) };
+    makeCanvas(hidden, 'visitor');
+    await waitFor(() => expect(markers).toHaveBeenCalled());
+    expect(markers.mock.calls.some(([, options]) => (options?.icon as L.DivIcon)?.options.className === 'v5-transition-badge')).toBe(false);
+  });
+
+  it('renders explicitly placed generated nodes but excludes unplaced generated nodes', async () => {
+    const draft = staticDraft();
+    const generated = draft.nodes.find((node) => node.id === 's-a0g')!;
+    generated.visitorVisible = true;
+    generated.name = 'PRIVATE GENERATED NAME';
+    draft.places.push({ id: 'p-generated-visitor', name: 'Visitor stop', nodeId: generated.id, zoneId: 'b-a' });
+    const { container, rerender } = render(<CanvasHost document={draft} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(container.querySelectorAll('.v5-node-marker')).toHaveLength(3));
+    expect(container.textContent).not.toContain('PRIVATE GENERATED NAME');
+    const noPlace = { ...draft, places: draft.places.filter((place) => place.nodeId !== generated.id) };
+    rerender(<CanvasHost document={noPlace} view="visitor" activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(container.querySelectorAll('.v5-node-marker')).toHaveLength(2));
+    expect(container.textContent).not.toContain('PRIVATE GENERATED NAME');
+  });
+
+  it('sets static zoom four levels above each fitted frame, providing 16× magnification', async () => {
+    const zoomLimits: Array<{ limit: number; fitZoom: number }> = [];
+    const originalSetMaxZoom = L.Map.prototype.setMaxZoom;
+    vi.spyOn(L.Map.prototype, 'setMaxZoom').mockImplementation(function (this: L.Map, zoom: number) {
+      zoomLimits.push({ limit: zoom, fitZoom: this.getZoom() });
+      return originalSetMaxZoom.call(this, zoom);
+    });
+    render(<StaticCanvas document={staticDraft()} activeFrameId="frame-b-a-z0" mode="select" callbacks={{}} />);
+    await screen.findByRole('application', { name: 'Static floor plan' });
+    expect(zoomLimits.at(-1)!.limit - zoomLimits.at(-1)!.fitZoom).toBe(4);
+  });
+});
+
+afterEach(() => vi.restoreAllMocks());

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createDbForTest, discardDb } from './helpers.js';
-import { saveDraftV3Json } from '../src/draft.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+import { createDbForTest, discardDb, login, testContext } from './helpers.js';
+import { openDb } from '../src/db.js';
+import { loadDraftV3Json, saveDraftV3Json, updateDraftV3 } from '../src/draft.js';
 import { addNodeSamples, buildNodeProfiles, loadNodeSamples } from '../src/node-survey.js';
 
 const DRAFT = {
@@ -64,6 +69,132 @@ describe('node surveys', () => {
       expect(() => addNodeSamples(db, 'demo', 'nope', scans())).toThrow(/unknown node/);
       const stale = scans().map((s) => ({ ...s, fingerprintRevision: 0 }));
       expect(() => addNodeSamples(db, 'demo', 'n1', stale)).toThrow(/revision/);
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('rejects reused sample revisions with a structured conflict after a geometry save', () => {
+    const db = createDbForTest();
+    try {
+      updateDraftV3(db, { ...DRAFT, aps: [...DRAFT.aps] });
+      expect(addNodeSamples(db, 'demo', 'n1', scans())).toBe(3);
+      const moved = {
+        ...DRAFT,
+        aps: [...DRAFT.aps],
+        nodes: [{ ...DRAFT.nodes[0]!, lat: 13.051, fingerprintRevision: 2 }],
+      };
+      updateDraftV3(db, moved);
+      let failure: unknown;
+      try {
+        addNodeSamples(db, 'demo', 'n1', scans());
+      } catch (err) {
+        failure = err;
+      }
+      expect(failure).toMatchObject({ statusCode: 409, code: 'revision_conflict', nodeIds: ['n1'] });
+      expect((failure as { currentRevisions: Record<string, number> }).currentRevisions).toMatchObject({ n1: 2 });
+      // Current-revision scans still work; the conflict is only about reuse.
+      const fresh = scans().map((s, i) => ({ ...s, fingerprintRevision: 2, capturedAt: 2000 + i }));
+      expect(addNodeSamples(db, 'demo', 'n1', fresh)).toBe(3);
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('races sample submission against a revision-changing save without persisting stale samples', () => {
+    // Deterministic scheduler for the race window: an authorizer on the
+    // submitting connection commits a geometry-changing save on a SECOND
+    // connection after validation but before the sample insert lands. A
+    // correct implementation holds one write transaction across validation
+    // and insert, so the racing save either commits first (stale scans get
+    // 409/denied) or waits — stale rows must never land.
+    // (Numeric authorizer codes from `node:sqlite` constants, which
+    // @types/node does not declare: OK=0, DENY=1, INSERT=18.)
+    const SQLITE_OK = 0;
+    const SQLITE_DENY = 1;
+    const SQLITE_INSERT = 18;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'navmap-race-'));
+    const file = path.join(dir, 'race.db');
+    const seed = openDb(file);
+    const saver = openDb(file);
+    // setAuthorizer exists at runtime; @types/node does not declare it yet.
+    const submitter = openDb(file) as DatabaseSync & {
+      setAuthorizer(
+        cb: ((action: number, arg1: string | null, arg2: string | null, dbName: string | null, triggerName: string | null) => number) | null,
+      ): void;
+    };
+    try {
+      updateDraftV3(seed, { ...DRAFT, aps: [...DRAFT.aps] });
+      seed.close();
+      saver.exec('PRAGMA busy_timeout = 0');
+      const moved = {
+        ...DRAFT,
+        aps: [...DRAFT.aps],
+        nodes: [{ ...DRAFT.nodes[0]!, lat: 13.051, fingerprintRevision: 2 }],
+      };
+      let raced = false;
+      submitter.setAuthorizer((action: number, arg1: string | null) => {
+        if (action === SQLITE_INSERT && arg1 === 'node_samples' && !raced) {
+          raced = true;
+          try {
+            updateDraftV3(saver, moved);
+          } catch {
+            // The racing save lost contention: deny the insert rather than
+            // persisting scans validated against a superseded revision.
+            return SQLITE_DENY;
+          }
+        }
+        return SQLITE_OK;
+      });
+      let failure: unknown;
+      try {
+        addNodeSamples(submitter, 'demo', 'n1', scans());
+      } catch (err) {
+        failure = err;
+      }
+      expect(raced).toBe(true);
+      expect(failure).toBeDefined();
+      expect(loadNodeSamples(submitter, 'demo', 'n1')).toHaveLength(0);
+      // The racing save never committed either: contention fails atomically.
+      const stored = JSON.parse(loadDraftV3Json(submitter, 'demo')!);
+      expect(stored.nodes[0]).toMatchObject({ lat: 13.05, fingerprintRevision: 1 });
+    } finally {
+      try {
+        seed.close();
+      } catch {
+        /* already closed */
+      }
+      saver.close();
+      submitter.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never resurrects stale samples after save, geometry change, restore, and publish', async () => {
+    const { db, app } = testContext();
+    try {
+      const { cookie } = await login(app);
+      const put = (payload: Record<string, unknown>) =>
+        app.inject({ method: 'PUT', url: '/api/admin/venues/demo/draft-v3', headers: { cookie, origin: 'http://localhost' }, payload });
+      const sample = (scans: Record<string, unknown>[]) =>
+        app.inject({ method: 'POST', url: '/api/admin/venues/demo/node-samples', headers: { cookie, origin: 'http://localhost' }, payload: { nodeId: 'n1', scans } });
+      const publish = () => app.inject({ method: 'POST', url: '/api/admin/venues/demo/publish-v3', headers: { cookie, origin: 'http://localhost' } });
+
+      expect((await put({ ...DRAFT, aps: [...DRAFT.aps] })).statusCode).toBe(200);
+      expect((await sample(scans())).statusCode).toBe(200);
+      expect((await publish()).json()).toMatchObject({ profiles: [{ nodeId: 'n1', fingerprintRevision: 1 }] });
+
+      // Geometry moves on: stale samples stop publishing and cannot be reused.
+      const moved = { ...DRAFT, aps: [...DRAFT.aps], nodes: [{ ...DRAFT.nodes[0]!, lat: 13.051, fingerprintRevision: 2 }] };
+      expect((await put(moved)).statusCode).toBe(200);
+      expect((await publish()).json()).toMatchObject({ profiles: [] });
+      expect((await sample(scans())).statusCode).toBe(409);
+
+      // Undoing the geometry (even with a fresh monotonic revision) does not
+      // silently reactivate the old samples.
+      const restored = { ...DRAFT, aps: [...DRAFT.aps], nodes: [{ ...DRAFT.nodes[0]!, fingerprintRevision: 3 }] };
+      expect((await put(restored)).statusCode).toBe(200);
+      expect((await publish()).json()).toMatchObject({ profiles: [] });
     } finally {
       discardDb(db);
     }

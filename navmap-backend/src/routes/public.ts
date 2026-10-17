@@ -1,24 +1,46 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { getLatestVersion } from '../db.js';
-import { parseManifestV3 } from '../draft.js';
+import { draftSchemaVersion, parseManifestV3 } from '../draft.js';
+import { LAYOUT_ASSET_ID_RE, readLayoutAsset } from '../layout-assets.js';
+import { getVenueName } from '../venues.js';
+import { parseMapManifest } from '../map-contract.js';
+import { isV5AuthoringEnabled } from '../env.js';
 import { normalizeVenueId } from '../venue-id.js';
+import { versionAssetPath } from '../version-dir.js';
 
-function loadManifest(db: DatabaseSync, venueId: string, version: number) {
+/**
+ * Load the stored manifest JSON after validating its schema. V4 documents
+ * validate against the legacy schema; V5 against the frame-aware contract.
+ * Callers send the ORIGINAL stored bytes (never a re-serialized in-memory
+ * upgrade), so immutable V4 responses stay byte-identical V4 JSON.
+ */
+function loadManifestJson(db: DatabaseSync, venueId: string, version: number): string {
   normalizeVenueId(venueId);
   const row = db.prepare('SELECT manifest_json FROM versions WHERE venue_id = ? AND version = ?').get(venueId, version) as
     | { manifest_json: string }
     | undefined;
   if (!row) throw Object.assign(new Error('unknown version'), { statusCode: 404 });
+  let json: unknown;
   try {
-    return parseManifestV3(JSON.parse(row.manifest_json));
+    json = JSON.parse(row.manifest_json);
   } catch {
     throw Object.assign(new Error('unsupported manifest schema; only V3 is served'), { statusCode: 415 });
   }
+  try {
+    if (draftSchemaVersion(json) === 5) parseMapManifest(json);
+    else parseManifestV3(json);
+  } catch {
+    throw Object.assign(new Error('unsupported manifest schema; only V3 is served'), { statusCode: 415 });
+  }
+  return row.manifest_json;
 }
 
-export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): void {
+export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync, opts: { dataDir: string }): void {
+  app.get('/api/capabilities', async () => ({ mapV5AuthoringEnabled: isV5AuthoringEnabled() }));
+
   app.get('/api/venues/:venueId/latest', async (req, reply) => {
     const { venueId } = req.params as { venueId: string };
     try { normalizeVenueId(venueId); }
@@ -26,7 +48,7 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): vo
     const version = getLatestVersion(db, venueId);
     if (version <= 0) return reply.code(404).send({ error: 'no published version' });
     reply.header('cache-control', 'no-store');
-    return { venueId, version };
+    return { venueId, version, name: getVenueName(db, venueId) ?? venueId };
   });
 
   app.get('/api/venues/:venueId/versions/:version/manifest', async (req, reply) => {
@@ -34,8 +56,7 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): vo
     const version = Number(rawVersion);
     if (!Number.isInteger(version) || version <= 0) return reply.code(404).send({ error: 'unknown version' });
     try {
-      const manifest = loadManifest(db, venueId, version);
-      const body = JSON.stringify(manifest);
+      const body = loadManifestJson(db, venueId, version);
       reply.header('cache-control', 'public, max-age=31536000, immutable');
       reply.header('etag', `"${createHash('sha256').update(body).digest('hex')}"`);
       reply.header('content-type', 'application/json');
@@ -44,4 +65,84 @@ export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync): vo
       return reply.code((err as { statusCode?: number }).statusCode ?? 404).send({ error: (err as Error).message });
     }
   });
+
+  // Immutable manifest-scoped public assets: serves canonical bytes only for
+  // assets referenced by the stored manifest of that exact version, with the
+  // manifest's claimed metadata cross-checked against the venue-owned
+  // registry (forged claims fail closed with 404). V4 manifests reference no
+  // assets, so their responses are unchanged.
+  app.get('/api/venues/:venueId/versions/:version/assets/:assetId', async (req, reply) => {
+    const { venueId, version: rawVersion, assetId } = req.params as {
+      venueId: string;
+      version: string;
+      assetId: string;
+    };
+    const version = Number(rawVersion);
+    if (!Number.isInteger(version) || version <= 0) return reply.code(404).send({ error: 'unknown version' });
+    try {
+      normalizeVenueId(venueId);
+    } catch {
+      return reply.code(404).send({ error: 'unknown venue' });
+    }
+    if (!LAYOUT_ASSET_ID_RE.test(assetId)) return reply.code(404).send({ error: 'unknown layout asset' });
+    const row = db
+      .prepare('SELECT manifest_json FROM versions WHERE venue_id = ? AND version = ?')
+      .get(venueId, version) as { manifest_json: string } | undefined;
+    if (!row) return reply.code(404).send({ error: 'unknown version' });
+    const claim = manifestBackgroundClaim(row.manifest_json, assetId);
+    if (!claim) return reply.code(404).send({ error: 'unknown layout asset' });
+    try {
+      const { asset } = readLayoutAsset(db, opts.dataDir, venueId, assetId);
+      if (
+        claim.sha256.toLowerCase() !== asset.sha256 ||
+        claim.width !== asset.width ||
+        claim.height !== asset.height ||
+        claim.byteLength !== asset.byteLength
+      ) {
+        return reply.code(404).send({ error: 'unknown layout asset' });
+      }
+      const bytes = fs.readFileSync(versionAssetPath(opts.dataDir, venueId, version, assetId));
+      if (bytes.length !== asset.byteLength || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) {
+        return reply.code(404).send({ error: 'unknown layout asset' });
+      }
+      reply.header('content-type', 'image/png');
+      reply.header('x-content-type-options', 'nosniff');
+      reply.header('cache-control', 'public, max-age=31536000, immutable');
+      reply.header('etag', `"${asset.sha256}"`);
+      return reply.send(bytes);
+    } catch (err) {
+      return reply.code((err as { statusCode?: number }).statusCode ?? 404).send({ error: (err as Error).message });
+    }
+  });
+}
+
+/**
+ * Find the manifest's background claim for one asset ID. Returns null when
+ * the stored manifest does not reference the asset (including every V4
+ * manifest, which carries no frame backgrounds).
+ */
+function manifestBackgroundClaim(
+  manifestJson: string,
+  assetId: string,
+): { width: number; height: number; sha256: string; byteLength: number } | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(manifestJson);
+  } catch {
+    return null;
+  }
+  if (draftSchemaVersion(json) !== 5) return null;
+  let manifest;
+  try {
+    manifest = parseMapManifest(json);
+  } catch {
+    return null;
+  }
+  for (const frame of manifest.frames) {
+    const bg = frame.background;
+    if (bg && bg.assetId === assetId) {
+      return { width: bg.width, height: bg.height, sha256: bg.sha256, byteLength: bg.byteLength };
+    }
+  }
+  return null;
 }

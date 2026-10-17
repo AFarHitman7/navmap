@@ -1,6 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import { loadDraftV3Json, parseDraftV3, updateDraftV3 } from '../draft.js';
+import { BSSID_RE, changedFrameNodeIdsV5, draftSchemaVersion, enforceMonotonicRevisions, loadDraftV3Json, nodeGeometryKeyV5, normalizeBssid, parseDraftV3, recordRevisionHighWater, updateDraftV3, type RevisionNodeRef } from '../draft.js';
+import { parseMapDraft } from '../map-contract.js';
+import { isV5AuthoringEnabled } from '../env.js';
+import { validateSaveV5 } from '../validate-v3.js';
+import { saveDraftV3Json } from '../draft.js';
 import { publishV3 } from '../publish-v3.js';
 import { addNodeSamples, nodeSamplesBodySchema } from '../node-survey.js';
 import { createVenue, ensureVenue, listVenues, renameVenue } from '../venues.js';
@@ -8,13 +12,31 @@ import { normalizeVenueId } from '../venue-id.js';
 import { z } from 'zod';
 
 const nameBody = z.object({ name: z.unknown() }).strict();
+const createBody = z.object({ name: z.unknown(), canvasKind: z.enum(['geographic', 'static']).optional() }).strict();
+
+/** Pass structured revision-conflict fields through JSON error responses. */
+function conflictFields(err: unknown): {
+  code?: 'revision_conflict';
+  nodeIds?: string[];
+  currentRevisions?: Record<string, number>;
+} {
+  const e = err as { code?: unknown; nodeIds?: unknown; currentRevisions?: unknown };
+  return {
+    ...(e.code === 'revision_conflict' ? { code: 'revision_conflict' as const } : {}),
+    ...(Array.isArray(e.nodeIds) ? { nodeIds: e.nodeIds } : {}),
+    ...(e.currentRevisions && typeof e.currentRevisions === 'object'
+      ? { currentRevisions: e.currentRevisions as Record<string, number> }
+      : {}),
+  };
+}
 
 export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts: { dataDir: string }): void {
   app.get('/api/admin/venues', async () => listVenues(db));
   app.post('/api/admin/venues', async (req, reply) => {
-    const parsed = nameBody.safeParse(req.body ?? {});
+    const parsed = createBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid venue name' });
-    try { return reply.code(201).send(createVenue(db, parsed.data.name as string)); }
+    if (parsed.data.canvasKind && !isV5AuthoringEnabled()) return reply.code(403).send({ error: 'V5 map authoring is disabled on this server (MAP_V5_AUTHORING_ENABLED)' });
+    try { return reply.code(201).send(createVenue(db, parsed.data.name as string, parsed.data.canvasKind ?? 'v4')); }
     catch (err) { return reply.code((err as { statusCode?: number }).statusCode ?? 400).send({ error: (err as Error).message }); }
   });
   app.patch('/api/admin/venues/:venueId', async (req, reply) => {
@@ -31,7 +53,9 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
       ensureVenue(db, venueId);
       const raw = loadDraftV3Json(db, venueId);
       if (!raw) return reply.code(404).send({ error: `no v3 draft for venue ${venueId}` });
-      return parseDraftV3(JSON.parse(raw));
+      const json = JSON.parse(raw);
+      // Mixed storage: V5 drafts validate against the frame-aware contract.
+      return draftSchemaVersion(json) === 5 ? parseMapDraft(json) : parseDraftV3(json);
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 404;
       return reply.code(status).send({ error: (err as Error).message });
@@ -47,6 +71,24 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
       const status = (err as { statusCode?: number }).statusCode ?? 404;
       return reply.code(status).send({ error: (err as Error).message });
     }
+    // V5 saves dispatch before the legacy path (reader-first gate enforced).
+    if (draftSchemaVersion(req.body) === 5) {
+      if (!isV5AuthoringEnabled()) {
+        return reply.code(403).send({ error: 'V5 map authoring is disabled on this server (MAP_V5_AUTHORING_ENABLED)' });
+      }
+      try {
+        const parsed = parseMapDraft(req.body);
+        if (parsed.venueId !== venueId) {
+          return reply.code(400).send({ error: 'venue mismatch' });
+        }
+        return updateDraftV5(db, parsed);
+      } catch (err) {
+        const status = (err as { statusCode?: number }).statusCode ?? 400;
+        const issues = (err as { issues?: unknown }).issues;
+        const errors = (err as { errors?: string[] }).errors;
+        return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}), ...(errors ? { errors } : {}), ...conflictFields(err) });
+      }
+    }
     let draft;
     try {
       // Parse before writing: a venue mismatch must not touch any draft.
@@ -58,7 +100,7 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 400;
       const issues = (err as { issues?: unknown }).issues;
-      return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}) });
+      return reply.code(status).send({ error: (err as Error).message, ...(issues ? { issues } : {}), ...conflictFields(err) });
     }
     return draft;
   });
@@ -76,7 +118,7 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
       return { count };
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 400;
-      return reply.code(status).send({ error: (err as Error).message });
+      return reply.code(status).send({ error: (err as Error).message, ...conflictFields(err) });
     }
   });
 
@@ -90,4 +132,61 @@ export function registerVenueRoutes(app: FastifyInstance, db: DatabaseSync, opts
       return reply.code(status).send({ error: (err as Error).message, ...(errors ? { errors } : {}) });
     }
   });
+}
+
+/**
+ * Explicit V5 save: strict frame-aware parse plus save-time graph/frame
+ * membership checks (static content needs assigned backgrounds), then atomic
+ * revision enforcement (background/calibration changes conservatively
+ * invalidate every node in the affected frame). APK/SSID
+ * allowlist normalization mirrors the legacy path.
+ */
+export function updateDraftV5(db: DatabaseSync, parsed: ReturnType<typeof parseMapDraft>): ReturnType<typeof parseMapDraft> {
+  const saveErrors = validateSaveV5(parsed);
+  if (saveErrors.length > 0) {
+    throw Object.assign(new Error(saveErrors.join('; ')), { statusCode: 400, errors: saveErrors });
+  }
+  const aps = [...new Set(parsed.aps.map(normalizeBssid))];
+  for (const bssid of aps) {
+    if (!BSSID_RE.test(bssid)) throw Object.assign(new Error(`invalid BSSID: ${bssid}`), { statusCode: 400 });
+  }
+  const draft = { ...parsed, aps };
+  const incoming: RevisionNodeRef[] = draft.nodes.map((n) => ({
+    id: n.id,
+    fingerprintRevision: n.fingerprintRevision,
+    geometry: nodeGeometryKeyV5(n),
+  }));
+  // Atomic check-and-write, mirroring the V4 path (BEGIN IMMEDIATE so
+  // concurrent saves and sample submissions serialize): conflicts persist nothing.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const storedRaw = loadDraftV3Json(db, draft.venueId);
+    let stored: RevisionNodeRef[] | null = null;
+    let frameInvalidated = new Set<string>();
+    if (storedRaw) {
+      const json = JSON.parse(storedRaw);
+      if (draftSchemaVersion(json) === 5) {
+        const prev = parseMapDraft(json);
+        stored = prev.nodes.map((n) => ({
+          id: n.id,
+          fingerprintRevision: n.fingerprintRevision,
+          geometry: nodeGeometryKeyV5(n),
+        }));
+        frameInvalidated = changedFrameNodeIdsV5(prev, draft);
+      }
+    }
+    enforceMonotonicRevisions(db, draft.venueId, incoming, stored, frameInvalidated);
+    saveDraftV3Json(db, draft.venueId, JSON.stringify(draft));
+    db.prepare('INSERT INTO aps (venue_id, json) VALUES (?, ?) ON CONFLICT(venue_id) DO UPDATE SET json = excluded.json').run(draft.venueId, JSON.stringify(aps));
+    recordRevisionHighWater(db, draft.venueId, draft.nodes);
+    db.exec('COMMIT');
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+  return parseMapDraft(draft);
 }

@@ -1,6 +1,7 @@
 import { normalizeBssid } from './scan';
 import { containsPoint } from './geo';
 import type { BoundsV3 } from './contract-v3';
+import type { Rect } from './map-contract';
 export type Reading = { bssid: string; rssi: number };
 export type NodeProfile = { nodeId: string; medianRssi: Record<string, number>; scanCount: number };
 export type NodeMatch = { nodeId: string; score: number; commonAps: number; confidence: 'high' | 'medium' | 'low' };
@@ -54,21 +55,87 @@ export type ZoneEstimate =
   | { kind: 'outdoors' }
   | { kind: 'outside' };
 
-/** GPS classifies zones only — it never identifies a node or floor. */
+type GeoBoundsLike = { north: number; south: number; east: number; west: number };
+type ZoneBoundsLike = BoundsV3 | Rect;
+
+function isGeographicBounds(bounds: unknown): bounds is GeoBoundsLike {
+  if (typeof bounds !== 'object' || bounds === null) return false;
+  const b = bounds as Record<string, unknown>;
+  // Legacy V4 bounds carry no kind discriminant and are always geographic.
+  if (!('kind' in b) || b.kind === undefined) {
+    return (
+      typeof b.north === 'number' && typeof b.south === 'number' && typeof b.east === 'number' && typeof b.west === 'number'
+    );
+  }
+  return (b as { kind?: unknown }).kind === 'geographic';
+}
+
+/**
+ * GPS classifies zones only — it never identifies a node or floor.
+ * Geographic-only: static canvases are bypassed (reported as outside) and
+ * never classified, and static mode never requests geolocation.
+ */
 export function classifyGpsZone(
-  map: { boundary: BoundsV3; indoorZones: Array<{ id: string; bounds: BoundsV3 }> },
+  map: {
+    boundary: BoundsV3 | { kind: string; north?: number; south?: number; east?: number; west?: number } | null;
+    indoorZones: Array<{ id: string; bounds?: ZoneBoundsLike }>;
+    canvas?: { kind: 'geographic' | 'static' };
+  },
   lat: number,
   lng: number,
 ): ZoneEstimate {
-  if (!containsPoint(map.boundary, lat, lng)) return { kind: 'outside' };
+  if (map.canvas?.kind === 'static') return { kind: 'outside' };
+  if (!isGeographicBounds(map.boundary)) return { kind: 'outside' };
+  const boundary = map.boundary as BoundsV3;
+  if (!containsPoint(boundary, lat, lng)) return { kind: 'outside' };
   for (const zone of map.indoorZones) {
-    if (containsPoint(zone.bounds, lat, lng)) return { kind: 'indoors', zoneId: zone.id };
+    if (!isGeographicBounds(zone.bounds)) continue;
+    if (containsPoint(zone.bounds as BoundsV3, lat, lng)) return { kind: 'indoors', zoneId: zone.id };
   }
   return { kind: 'outdoors' };
 }
 
 export const WIFI_FRESH_MS = 60_000;
 export const NODE_STALE_MS = 120_000;
+/** Raw GPS evidence older than this is never shown as a live dot. */
+export const GPS_STALE_MS = 60_000;
+
+export type GpsFixEvidence = { lat: number; lon: number; accuracy: number; seenAt: number };
+
+export function isValidGpsFix(fix: unknown): fix is GpsFixEvidence {
+  if (typeof fix !== 'object' || fix === null) return false;
+  const f = fix as Record<string, unknown>;
+  if (typeof f.lat !== 'number' || typeof f.lon !== 'number') return false;
+  if (typeof f.accuracy !== 'number' || typeof f.seenAt !== 'number') return false;
+  if (!Number.isFinite(f.lat) || !Number.isFinite(f.lon)) return false;
+  if (!Number.isFinite(f.accuracy) || f.accuracy < 0) return false;
+  if (!Number.isFinite(f.seenAt)) return false;
+  if (f.lat < -90 || f.lat > 90 || (f.lon as number) < -180 || (f.lon as number) > 180) return false;
+  return true;
+}
+
+export function isGpsFixStale(seenAt: number, now: number = Date.now()): boolean {
+  return now - seenAt > GPS_STALE_MS;
+}
+
+/**
+ * Raw GPS evidence for the unsnapped dot/accuracy display. Returns null for
+ * missing, invalid, or stale fixes so they never become a precise live dot.
+ * GPS evidence never resolves to a node — see resolveLocation.
+ */
+export function gpsDisplayDot(
+  fix: GpsFixEvidence | null | undefined,
+  now: number = Date.now(),
+): GpsFixEvidence | null {
+  if (!isValidGpsFix(fix)) return null;
+  if (isGpsFixStale(fix.seenAt, now)) return null;
+  return fix;
+}
+
+/** Honest permission messaging: Wi-Fi positioning is a native capability. */
+export const WIFI_LOCATION_NOTE = 'Wi-Fi positioning needs native Android capabilities and surveyed profiles.';
+/** GPS narrows to an area only; it never identifies an indoor node or floor. */
+export const GPS_AREA_NOTE = 'GPS can suggest an area; it does not identify a node or floor.';
 
 export type LocationState =
   | { kind: 'unknown' }

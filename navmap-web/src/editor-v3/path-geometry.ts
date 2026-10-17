@@ -2,13 +2,20 @@ import { distanceMeters } from '../geo-v3';
 
 export const PATH_POINT_SPACING_METERS = 3;
 export type GeoPoint = { lat: number; lng: number };
+export type LocalPoint = { x: number; y: number };
 export type SegmentIntersection =
   | { kind: 'point'; point: GeoPoint; aFraction: number; bFraction: number }
+  | { kind: 'overlap' }
+  | null;
+export type LocalSegmentIntersection =
+  | { kind: 'point'; point: LocalPoint; aFraction: number; bFraction: number }
   | { kind: 'overlap' }
   | null;
 
 const EARTH_METERS_PER_DEGREE = 111_320;
 const GEOGRAPHIC_EQUALITY_TOLERANCE_METERS = 0.01;
+/** Local equality tolerance in unit coordinates (~1 source pixel at 1000px). */
+export const LOCAL_EQUALITY_TOLERANCE = 0.001;
 
 type PlanePoint = { x: number; y: number };
 
@@ -154,6 +161,71 @@ function clampSegmentFraction(fraction: number, tolerance: number): number {
 
 function interpolate(a: GeoPoint, b: GeoPoint, fraction: number): GeoPoint {
   return { lat: a.lat + (b.lat - a.lat) * fraction, lng: a.lng + (b.lng - a.lng) * fraction };
+}
+
+/** Same-frame local intersection in unit coordinates. Never call across frames. */
+export function intersectLocalSegments(a: LocalPoint, b: LocalPoint, c: LocalPoint, d: LocalPoint): LocalSegmentIntersection {
+  assertFiniteLocalPoint(a);
+  assertFiniteLocalPoint(b);
+  assertFiniteLocalPoint(c);
+  assertFiniteLocalPoint(d);
+  const r = { x: b.x - a.x, y: b.y - a.y };
+  const s = { x: d.x - c.x, y: d.y - c.y };
+  const aLength = Math.hypot(r.x, r.y);
+  const bLength = Math.hypot(s.x, s.y);
+  if (!Number.isFinite(aLength) || aLength <= 0 || !Number.isFinite(bLength) || bLength <= 0) {
+    throw new Error('Path segments must have a positive finite length.');
+  }
+  const qMinusP = { x: c.x - a.x, y: c.y - a.y };
+  const denominator = r.x * s.y - r.y * s.x;
+  const aTolerance = LOCAL_EQUALITY_TOLERANCE / aLength;
+  const bTolerance = LOCAL_EQUALITY_TOLERANCE / bLength;
+
+  if (Math.abs(denominator) <= LOCAL_EQUALITY_TOLERANCE ** 2) {
+    if (Math.abs(qMinusP.x * r.y - qMinusP.y * r.x) > LOCAL_EQUALITY_TOLERANCE * aLength) return null;
+    const rr = r.x * r.x + r.y * r.y;
+    const cFraction = ((c.x - a.x) * r.x + (c.y - a.y) * r.y) / rr;
+    const dFraction = ((d.x - a.x) * r.x + (d.y - a.y) * r.y) / rr;
+    const start = Math.max(0, Math.min(cFraction, dFraction));
+    const end = Math.min(1, Math.max(cFraction, dFraction));
+    if ((end - start) * aLength > LOCAL_EQUALITY_TOLERANCE) return { kind: 'overlap' };
+    if (end < -aTolerance || start > 1 + aTolerance) return null;
+    const aFraction = clampLocalFraction((start + end) / 2, aTolerance);
+    const point = interpolateLocal(a, b, aFraction);
+    const seg = { x: d.x - c.x, y: d.y - c.y };
+    const bFraction = ((point.x - c.x) * seg.x + (point.y - c.y) * seg.y) / (seg.x * seg.x + seg.y * seg.y);
+    if (bFraction < -bTolerance || bFraction > 1 + bTolerance) return null;
+    return { kind: 'point', point, aFraction, bFraction: clampLocalFraction(bFraction, bTolerance) };
+  }
+
+  const aFraction = (qMinusP.x * s.y - qMinusP.y * s.x) / denominator;
+  const bFraction = (qMinusP.x * r.y - qMinusP.y * r.x) / denominator;
+  if (aFraction < -aTolerance || aFraction > 1 + aTolerance || bFraction < -bTolerance || bFraction > 1 + bTolerance) {
+    return null;
+  }
+  const clampedA = clampLocalFraction(aFraction, aTolerance);
+  const clampedB = clampLocalFraction(bFraction, bTolerance);
+  return { kind: 'point', point: interpolateLocal(a, b, clampedA), aFraction: clampedA, bFraction: clampedB };
+}
+
+export function sameLocalPoint(a: LocalPoint, b: LocalPoint): boolean {
+  return Math.abs(a.x - b.x) <= LOCAL_EQUALITY_TOLERANCE && Math.abs(a.y - b.y) <= LOCAL_EQUALITY_TOLERANCE;
+}
+
+function assertFiniteLocalPoint(point: LocalPoint): void {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    throw new Error('Path segment coordinates must be finite.');
+  }
+}
+
+function clampLocalFraction(fraction: number, tolerance: number): number {
+  if (Math.abs(fraction) <= tolerance) return 0;
+  if (Math.abs(fraction - 1) <= tolerance) return 1;
+  return fraction;
+}
+
+function interpolateLocal(a: LocalPoint, b: LocalPoint, fraction: number): LocalPoint {
+  return { x: a.x + (b.x - a.x) * fraction, y: a.y + (b.y - a.y) * fraction };
 }
 
 function fractionAlongSegment(a: GeoPoint, b: GeoPoint, point: GeoPoint): number {

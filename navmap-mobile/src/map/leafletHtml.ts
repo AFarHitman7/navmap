@@ -4,38 +4,49 @@ export const LEAFLET_CSS = "/* required styles */\r\n\r\n.leaflet-pane,\r\n.leaf
 
 export type LeafletMapInput = {
   path: string[];
+  visitor?: boolean;
   onlineTiles?: boolean;
+  /** Unsnapped raw GPS evidence; rendered only on geographic canvases, never on static frames. */
+  gps?: { lat: number; lng: number; accuracyMeters: number } | null;
+  staticFrame?: { width: number; height: number; imageDataUri: string; nodes: { id: string; name: string; x: number; y: number }[] };
   v3: {
     boundary: { north: number; south: number; east: number; west: number } | null;
     zones: { id: string; name: string; bounds: { north: number; south: number; east: number; west: number } }[];
-    nodes: { id: string; lat: number; lng: number; z: number; zoneId: string | null }[];
+    nodes: { id: string; name?: string; lat: number; lng: number; z: number; zoneId: string | null }[];
     activeZoneId: string | null;
     floorFilter: number | null;
   };
 };
 
 export function buildLeafletHtml(input: LeafletMapInput): string {
-  const data = JSON.stringify({ ...input, tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' }).replace(/</g, '\\u003c');
+  // Static frames never receive geographic evidence: strip it from the payload
+  // so an uploaded floor plan cannot render or leak a GPS position.
+  const data = JSON.stringify({ ...input, gps: input.staticFrame ? null : input.gps ?? null, tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' }).replace(/</g, '\\u003c');
+  const staticBranch = input.staticFrame ? [
+    "if(d.staticFrame){var s=d.staticFrame,sm=L.map('map',{crs:L.CRS.Simple,minZoom:-4,maxZoom:8,zoomSnap:.25,attributionControl:false});var sb=[[0,0],[s.height,s.width]];L.imageOverlay(s.imageDataUri,sb).addTo(sm);sm.fitBounds(sb);for(i=0;i<s.nodes.length;i++){var n=s.nodes[i],pt=[s.height*(1-n.y),s.width*n.x],marker=L.circleMarker(pt,{radius:6,color:'#176f68',fillColor:'#fff',fillOpacity:1}).addTo(sm);if(d.visitor&&n.name)marker.bindTooltip(n.name);else if(!d.visitor)marker.bindTooltip(n.id);}return;}"
+  ].join('') : '';
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>${LEAFLET_CSS} html,body,#map{height:100%;margin:0}</style></head>
 <body><div id="map"></div><script>${LEAFLET_JS}</script>
 <script>window.__NAVMAP__=${data};
 (function(){var d=window.__NAVMAP__;var i,v=d.v3,b=v.boundary;
+  ${staticBranch}
   var center=b?[(b.north+b.south)/2,(b.east+b.west)/2]:[0,0];
   var map=L.map('map');
   if(d.onlineTiles&&d.tileUrl){L.tileLayer(d.tileUrl,{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);}
-  if(b){var bounds=[[b.south,b.west],[b.north,b.east]];L.rectangle(bounds,{color:'#26796f',weight:3,fill:false}).addTo(map);map.fitBounds(bounds);}
+   if(b){var bounds=[[b.south,b.west],[b.north,b.east]];if(!d.visitor)L.rectangle(bounds,{color:'#26796f',weight:3,fill:false}).addTo(map);map.fitBounds(bounds);}
   var shown=[];
   function routeSegment(prev,next){if(prev&&next&&prev.zoneId===next.zoneId&&prev.z===next.z){L.polyline([[prev.lat,prev.lng],[next.lat,next.lng]],{color:'#16776c',weight:4}).addTo(map);}}
-  for(i=1;i<d.path.length;i++){
+   if(!d.visitor)for(i=1;i<d.path.length;i++){
     var prev=null, next=null;
     for(var j=0;j<v.nodes.length;j++){if(v.nodes[j].id===d.path[i-1])prev=v.nodes[j];if(v.nodes[j].id===d.path[i])next=v.nodes[j];}
     routeSegment(prev,next);
   }
-  for(i=0;i<v.zones.length;i++){var z=v.zones[i],zb=[[z.bounds.south,z.bounds.west],[z.bounds.north,z.bounds.east]];L.rectangle(zb,{color:'#c45b32',weight:2,fill:true,fillOpacity:.12}).bindTooltip(z.name).addTo(map);}
-  for(i=0;i<v.nodes.length;i++){var n=v.nodes[i];if((v.activeZoneId===null?n.zoneId===null:n.zoneId===v.activeZoneId)&&(v.floorFilter===null||n.z===v.floorFilter)){shown.push(n);L.circleMarker([n.lat,n.lng],{radius:6}).bindTooltip(n.id).addTo(map);}}
+   if(!d.visitor)for(i=0;i<v.zones.length;i++){var z=v.zones[i],zb=[[z.bounds.south,z.bounds.west],[z.bounds.north,z.bounds.east]];L.rectangle(zb,{color:'#c45b32',weight:2,fill:true,fillOpacity:.12}).bindTooltip(z.name).addTo(map);}
+   for(i=0;i<v.nodes.length;i++){var n=v.nodes[i];if((v.activeZoneId===null?n.zoneId===null:n.zoneId===v.activeZoneId)&&(v.floorFilter===null||n.z===v.floorFilter)){shown.push(n);var marker=L.circleMarker([n.lat,n.lng],{radius:6}).addTo(map);if(d.visitor&&n.name)marker.bindTooltip(n.name);else if(!d.visitor)marker.bindTooltip(n.id);}}
   if(!b&&!shown.length){map.setView(center,16);}
+   if(d.gps&&isFinite(d.gps.lat)&&isFinite(d.gps.lng)&&isFinite(d.gps.accuracyMeters)&&d.gps.accuracyMeters>=0){L.circle([d.gps.lat,d.gps.lng],{radius:d.gps.accuracyMeters,color:'#1a5fb4',weight:2,opacity:.8,fillColor:'#1a5fb4',fillOpacity:.15,interactive:false,className:'gps-accuracy-ring'}).addTo(map);var gpsDot=L.circleMarker([d.gps.lat,d.gps.lng],{radius:7,color:'#1a5fb4',weight:3,fillColor:'#fff',fillOpacity:1,interactive:false,className:'gps-dot-marker'}).addTo(map);gpsDot.bindTooltip('Your GPS position (unsnapped)');}
 })();
 //# sourceURL=navmap-leaflet</script></body></html>`;
   return html;

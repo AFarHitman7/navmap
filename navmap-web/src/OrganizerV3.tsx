@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocker } from 'react-router-dom';
-import { getDraftV3, login, publishV3, PublishValidationError, saveDraftV3 } from './api-v3';
+import { getDraftV3, login, publishV3, PublishValidationError, RevisionConflictError, saveDraftV3 } from './api-v3';
 import type { BoundsV3, DraftV3, EdgeV3, ManifestV3 } from './contract-v3';
 import {
   addFloor,
@@ -21,6 +21,7 @@ import {
   updateNodeLocation,
 } from './editor-v3/model';
 import { PathControls } from './editor-v3/PathControls';
+import { useEditorDocument } from './editor-v3/useEditorDocument';
 import { addDrawnPath, deleteConnection, removeDrawnPath, type PathVertex } from './editor-v3/paths';
 import { MapCanvasV3, type MapV3Mode } from './MapCanvasV3';
 import { Icon } from './editor/Icon';
@@ -31,14 +32,45 @@ import { isNodeVisible, resolveFloorVisibility, type ZoneFloorVisibility } from 
 type Tab = 'build' | 'places' | 'publish';
 type Candidate = { bounds: BoundsV3; kind: 'boundary' | 'zone' };
 const message = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong. Try again.');
+
+/**
+ * True when a keyboard event originates from a natively editable target whose
+ * own undo must win over document undo. Prefers the platform's isContentEditable
+ * computation (covers "", "true", "plaintext-only", and inheritance); falls back
+ * to a spec-shaped ancestor walk where isContentEditable is unavailable (jsdom).
+ */
+function isNativeUndoTarget(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+  const host = el.nodeType === 1 ? (el as HTMLElement) : el.parentElement;
+  if (!host) return false;
+  if (typeof (host as HTMLElement).isContentEditable === 'boolean') return (host as HTMLElement).isContentEditable;
+  let node: Element | null = host;
+  while (node) {
+    const attr = typeof node.getAttribute === 'function' ? node.getAttribute('contenteditable') : null;
+    if (attr !== null) {
+      const state = attr.trim().toLowerCase();
+      if (state === '' || state === 'true' || state === 'plaintext-only') return true;
+      if (state === 'false') return false;
+      // Any other value inherits: keep walking toward the root.
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
 const preferredFloor = (floors: { z: number }[]) => floors.find((f) => f.z === 0)?.z ?? floors[0]?.z ?? 0;
 const nodeLabel = (n: { id: string; name: string }) => `${n.name} ${n.id}`;
 const sameEdge = (edge: EdgeV3, from: string, to: string) =>
   (edge.from === from && edge.to === to) || (edge.from === to && edge.to === from);
 
 export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
-  const [draft, setDraft] = useState<DraftV3>(emptyDraftV3(venueId));
-  const [saved, setSaved] = useState('');
+  // The transaction history owns the document: every edit commits through it,
+  // loads/switches reset it, and save acknowledgements only mark it saved.
+  const doc = useEditorDocument(emptyDraftV3(venueId));
+  const draft = doc.document;
+  const dirty = doc.dirty;
+  const { undo: undoDoc, redo: redoDoc, reset: resetDoc } = doc;
   const [phase, setPhase] = useState<'loading' | 'login' | 'ready' | 'error'>('loading');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState('');
@@ -53,12 +85,14 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
   const [pendingPath, setPendingPath] = useState<PathVertex[]>([]);
   const [stairsArmed, setStairsArmed] = useState(false);
   const [selectedPathId, setSelectedPathId] = useState('');
+  const [showReferencePoints, setShowReferencePoints] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<{ from: string; to: string } | null>(null);
   const [floorChoices, setFloorChoices] = useState<ZoneFloorVisibility>({});
   const [showOutdoors, setShowOutdoors] = useState(true);
   const [placementZoneId, setPlacementZoneId] = useState<string | null>(null);
   const [placementFloorZ, setPlacementFloorZ] = useState(0);
   const [placeFormResetKey, setPlaceFormResetKey] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [zoneName, setZoneName] = useState('');
   const [published, setPublished] = useState<ManifestV3 | null>(null);
@@ -71,7 +105,6 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
   const nodeZone = node?.zoneId ? draft.indoorZones.find((z) => z.id === node.zoneId) : null;
   const nodePlace = node ? draft.places.find((p) => p.nodeId === node.id) : undefined;
   const indoorPlaceNodes = draft.nodes.filter((n) => n.zoneId !== null);
-  const dirty = JSON.stringify(draft) !== saved;
   const visibility = useMemo(() => resolveFloorVisibility(draft.indoorZones, floorChoices), [draft.indoorZones, floorChoices]);
   const validPlacementFloorZ = placementZone?.floors.some((f) => f.z === placementFloorZ)
     ? placementFloorZ
@@ -88,15 +121,12 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
     setError('');
     try {
       const d = await getDraftV3(venueId);
-      setDraft(d);
-      setSaved(JSON.stringify(d));
+      resetDoc(d);
       setPhase('ready');
     } catch (err) {
       // No v3 draft yet: start from a blank map instead of an error page.
       if (/no v3 draft for venue/.test(message(err))) {
-        const blank = emptyDraftV3(venueId);
-        setDraft(blank);
-        setSaved('');
+        resetDoc(emptyDraftV3(venueId));
         setPhase('ready');
         return;
       }
@@ -110,16 +140,14 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
     getDraftV3(venueId).then(
       (d) => {
         if (active) {
-          setDraft(d);
-          setSaved(JSON.stringify(d));
+          resetDoc(d);
           setPhase('ready');
         }
       },
       (err: unknown) => {
         if (!active) return;
         if (/no v3 draft for venue/.test(err instanceof Error ? err.message : '')) {
-          setDraft(emptyDraftV3(venueId));
-          setSaved('');
+          resetDoc(emptyDraftV3(venueId));
           setPhase('ready');
           return;
         }
@@ -130,7 +158,27 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
     return () => {
       active = false;
     };
-  }, [venueId]);
+  }, [venueId, resetDoc]);
+
+  const undoEditOrPending = useCallback(() => {
+    if (lock.current || busy || phase !== 'ready') return;
+    if (stairsArmed) {
+      setStairsArmed(false);
+      setStatus('Stairs link disarmed. Undo again to remove path points.');
+      return;
+    }
+    if (pendingPath.length > 0) {
+      setPendingPath((vertices) => vertices.slice(0, -1));
+      setStatus(pendingPath.length > 1 ? 'Path point removed.' : 'Path drawing cleared.');
+      return;
+    }
+    if (undoDoc()) setStatus('Undone.');
+  }, [busy, phase, stairsArmed, pendingPath.length, undoDoc]);
+
+  const redoEditDoc = useCallback(() => {
+    if (lock.current || busy || phase !== 'ready') return;
+    if (redoDoc()) setStatus('Redone.');
+  }, [busy, phase, redoDoc]);
 
   useEffect(() => {
     const beforeUnload = (e: BeforeUnloadEvent) => {
@@ -139,22 +187,33 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
         e.returnValue = '';
       }
     };
-    const escape = (e: KeyboardEvent) => {
+    const shortcuts = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setMode('navigate');
         setCandidate(null);
         setFrom('');
         setPendingPath([]);
         setStairsArmed(false);
+        return;
       }
+      if (!e.ctrlKey && !e.metaKey) return;
+      const key = e.key.toLowerCase();
+      const wantUndo = key === 'z' && !e.shiftKey;
+      const wantRedo = key === 'y' || (key === 'z' && e.shiftKey);
+      if (!wantUndo && !wantRedo) return;
+      if (isNativeUndoTarget(e.target)) return; // Native input undo remains native.
+      if (lock.current || busy || phase !== 'ready') return; // Locked while loading/saving/publishing.
+      e.preventDefault();
+      if (wantUndo) undoEditOrPending();
+      else redoEditDoc();
     };
     window.addEventListener('beforeunload', beforeUnload);
-    window.addEventListener('keydown', escape);
+    window.addEventListener('keydown', shortcuts);
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
-      window.removeEventListener('keydown', escape);
+      window.removeEventListener('keydown', shortcuts);
     };
-  }, [dirty, phase]);
+  }, [dirty, phase, busy, pendingPath, stairsArmed, undoEditOrPending, redoEditDoc]);
 
   useEffect(() => {
     if (placementZoneId && !placementZone) {
@@ -172,27 +231,40 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
   let blocker: { state: string; proceed?: () => void; reset?: () => void } = { state: 'unblocked' };
   try {
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    blocker = useBlocker(dirty && phase === 'ready') as { state: string; proceed?: () => void; reset?: () => void };
+    blocker = useBlocker((dirty || pendingPath.length > 0 || stairsArmed || candidate !== null || Boolean(from)) && phase === 'ready') as { state: string; proceed?: () => void; reset?: () => void };
   } catch {
     blocker = { state: 'unblocked' };
+  }
+
+  // History owns the document: after any commit/undo/redo/reset, drop
+  // selections that no longer exist instead of showing orphan inspectors.
+  // Pan, zoom, selection, and visibility are intentionally never recorded.
+  useEffect(() => {
+    if (selectedNodeId && !draft.nodes.some((n) => n.id === selectedNodeId)) setSelectedNodeId('');
+    if (selectedZoneId && !draft.indoorZones.some((z) => z.id === selectedZoneId)) setSelectedZoneId(null);
+    if (placementZoneId && !draft.indoorZones.some((z) => z.id === placementZoneId)) {
+      setPlacementZoneId(null);
+      setPlacementFloorZ(0);
+    }
+    if (selectedPathId && !(draft.paths ?? []).some((p) => p.id === selectedPathId)) setSelectedPathId('');
+    if (selectedConnection && !draft.edges.some((edge) => sameEdge(edge, selectedConnection.from, selectedConnection.to))) {
+      setSelectedConnection(null);
+    }
+  }, [draft, selectedNodeId, selectedZoneId, placementZoneId, selectedPathId, selectedConnection]);
+
+  function commitDoc(next: DraftV3, notice: string, label?: string): boolean {
+    if (lock.current) return false;
+    if (!doc.commit(label ?? notice, next)) return false;
+    setError('');
+    setSaveError(null);
+    setStatus(notice);
+    return true;
   }
 
   function edit(change: (d: DraftV3) => DraftV3, notice = 'Changes made. Save when you’re ready.') {
     if (lock.current) return false;
     try {
-      const next = change(draft);
-      setDraft(next);
-      setError('');
-      setStatus(notice);
-      if (!next.nodes.some((n) => n.id === selectedNodeId)) setSelectedNodeId('');
-      if (!next.indoorZones.some((z) => z.id === selectedZoneId)) {
-        setSelectedZoneId(null);
-      }
-      if (placementZoneId && !next.indoorZones.some((z) => z.id === placementZoneId)) {
-        setPlacementZoneId(null);
-        setPlacementFloorZ(0);
-      }
-      return true;
+      return commitDoc(change(draft), notice);
     } catch (err) {
       setError(message(err));
       return false;
@@ -248,10 +320,9 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
         const next = placementZone
           ? addNodeAt(draft, p.lat, p.lng, placementZone.id, validPlacementFloorZ)
           : addNodeAt(draft, p.lat, p.lng, null, 0);
-        setDraft(next);
-        setError('');
-        setStatus('Point added. Connect it to a neighbouring point.');
-        setSelectedNodeId(next.nodes[next.nodes.length - 1].id);
+        if (commitDoc(next, 'Point added. Draw a path to it.', 'Add point')) {
+          setSelectedNodeId(next.nodes[next.nodes.length - 1]!.id);
+        }
       } catch (err) {
         setError(message(err));
       }
@@ -383,12 +454,11 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
       } else {
         const name = zoneName.trim() || 'New zone';
         const next = addZone(draft, { name, bounds: candidate.bounds, floors: [{ z: 0, label: 'Ground' }] });
-        setDraft(next);
-        const nextZone = next.indoorZones[next.indoorZones.length - 1];
+        if (!commitDoc(next, `Zone ${name} added with a Ground floor.`, 'Add zone')) return;
+        const nextZone = next.indoorZones[next.indoorZones.length - 1]!;
         setSelectedZoneId(nextZone.id);
         setPlacementZoneId(nextZone.id);
         setPlacementFloorZ(preferredFloor(nextZone.floors));
-        setStatus(`Zone ${name} added with a Ground floor.`);
       }
       setCandidate(null);
       setZoneName('');
@@ -404,11 +474,13 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
     lock.current = true;
     setBusy(publish ? 'Publishing…' : 'Saving…');
     setError('');
+    setSaveError(null);
     if (publish) setTab('publish');
     try {
+      // The server acknowledgement only marks the save: history and any newer
+      // local snapshot stay intact, and a 409 conflict retains the document.
       const result = await saveDraftV3(draft, venueId);
-      setDraft(result);
-      setSaved(JSON.stringify(result));
+      doc.markSaved(result);
       if (publish) {
         setPublishIssues([]);
         const outcome = await publishV3(venueId);
@@ -420,7 +492,15 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
       return true;
     } catch (err) {
       if (err instanceof PublishValidationError) setPublishIssues(err.issues);
-      setError(message(err));
+      if (err instanceof RevisionConflictError) {
+        const detail = err.nodeIds.map((id) => `${id} (server revision ${err.currentRevisions[id] ?? '?'})`).join(', ');
+        const conflict = `Save conflict on ${detail || 'unknown nodes'}. Your edits are kept; resolve the conflict, then save again.`;
+        setError(conflict);
+        setSaveError(conflict);
+      } else {
+        setError(message(err));
+        setSaveError(message(err));
+      }
       return false;
     } finally {
       lock.current = false;
@@ -510,10 +590,28 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
     <div className="editor-page">
       <div className="workspace-heading">
         <div>
-          <span className="eyebrow">V3 VENUE EDITOR</span>
+          <span className="eyebrow">LEGACY V4 COMPATIBILITY EDITOR</span>
           <h1>Map editor — {venueId}</h1>
         </div>
         <div className="workspace-actions">
+          <button
+            type="button"
+            onClick={undoEditOrPending}
+            disabled={!!busy || (!doc.canUndo && pendingPath.length === 0 && !stairsArmed)}
+            aria-label="Undo"
+            title="Undo (Ctrl+Z)"
+          >
+            ↺ Undo
+          </button>
+          <button
+            type="button"
+            onClick={redoEditDoc}
+            disabled={!!busy || !doc.canRedo}
+            aria-label="Redo"
+            title="Redo (Ctrl+Y)"
+          >
+            ↻ Redo
+          </button>
           <span className={`save-state ${dirty ? 'dirty' : ''}`} data-testid="save-state">
             {busy || (dirty ? 'Unsaved changes' : 'All changes saved')}
           </span>
@@ -528,6 +626,8 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
       <UnsavedChangesDialog
         open={blocker.state === 'blocked'}
         busy={!!busy}
+        saveError={pendingPath.length || stairsArmed || candidate || from ? 'Finish or cancel the current drawing or connection before saving.' : saveError}
+        saveDisabled={pendingPath.length > 0 || stairsArmed || candidate !== null || Boolean(from)}
         onSave={() =>
           void (async () => {
             const ok = await save(false);
@@ -610,7 +710,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                 }}
               >
                 <Icon name="link" />
-                Connect
+                Legacy connect
               </button>
               <button
                 type="button"
@@ -647,6 +747,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
           <LayerPicker zones={draft.indoorZones} visibility={visibility} showOutdoors={showOutdoors}
             onFloorChange={(id, floor) => setFloorChoices((choices) => ({ ...choices, [id]: floor }))}
             onOutdoorsChange={setShowOutdoors} />
+          <label className="reference-points-toggle"><input type="checkbox" checked={showReferencePoints} onChange={(event) => setShowReferencePoints(event.target.checked)} /> Show survey reference points</label>
           <div className="map-frame">
             <MapCanvasV3
               draft={draft}
@@ -665,6 +766,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
               onNodeMove={handleNodeMove}
               pathPreview={pendingPath}
               selectedPathId={selectedPathId}
+              showReferencePoints={showReferencePoints}
               onPathClick={selectPath}
               onEdgeClick={selectConnection}
               onError={setError}
@@ -1062,9 +1164,9 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                       {mode === 'connect' && from && <p>Connecting from {from}. Select another point to link them.</p>}
                     </div>
                   )}
-                  {!draft.nodes.length && <p className="empty-hint">No points yet. Choose Add nodes, then click inside the boundary.</p>}
+                  {!draft.nodes.some((n) => showReferencePoints || !n.generated) && <p className="empty-hint">No points yet. Choose Add nodes, then click inside the boundary.</p>}
                   <ul className="point-list" aria-label="Graph nodes">
-                    {draft.nodes.map((n) => (
+                    {draft.nodes.filter((n) => showReferencePoints || !n.generated).map((n) => (
                       <li key={n.id}>
                         <button
                           type="button"

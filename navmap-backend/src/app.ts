@@ -1,10 +1,13 @@
 import cookie from '@fastify/cookie';
+import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fs from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { cleanupOrphanVersions } from './db.js';
+import { LAYOUT_SOURCE_MAX_BYTES } from './layout-assets.js';
 import { registerAdminRoutes } from './routes/admin.js';
+import { registerLayoutAssetRoutes, type LayoutAssetRouteHooks } from './routes/layout-assets.js';
 import { registerPublicRoutes } from './routes/public.js';
 
 export type AppOptions = {
@@ -12,6 +15,8 @@ export type AppOptions = {
   dataDir: string;
   webDistDir?: string;
   https?: { cert: Buffer; key: Buffer };
+  /** Test-only lifecycle observer seam; absent in production. */
+  layoutAssetHooks?: LayoutAssetRouteHooks;
 };
 
 export function buildApp(db: DatabaseSync, options: AppOptions): FastifyInstance {
@@ -19,11 +24,17 @@ export function buildApp(db: DatabaseSync, options: AppOptions): FastifyInstance
   cleanupOrphanVersions(db, options.dataDir);
 
   void app.register(cookie);
+  // Skip-override plugin: multipart parsing is available to every root route.
+  // Registration and decoded-image limits are separate protections: the
+  // plugin caps transport (one file, 20 MiB, no fields) while layout-assets
+  // enforces decoded dimensions and pixel counts after parsing.
+  void app.register(multipart, { limits: { files: 1, fileSize: LAYOUT_SOURCE_MAX_BYTES, fields: 0 } });
   registerAdminRoutes(app, db, {
     adminPasswordHash: options.adminPasswordHash,
     dataDir: options.dataDir,
   });
-  registerPublicRoutes(app, db);
+  registerLayoutAssetRoutes(app, db, { dataDir: options.dataDir, hooks: options.layoutAssetHooks });
+  registerPublicRoutes(app, db, { dataDir: options.dataDir });
 
   const dist = options.webDistDir;
   if (dist && fs.existsSync(dist)) {

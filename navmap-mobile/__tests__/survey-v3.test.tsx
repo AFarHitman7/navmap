@@ -172,7 +172,7 @@ test('v3 upload posts {nodeId, scans} to the node-samples URL', async () => {
 
 test('pathPointLabels reports one-based ordered membership', () => {
   expect(pathPointLabels({ paths: [{ id: 'p', name: 'Corridor', nodeIds: ['a', 'b'] }] }, 'b'))
-    .toEqual([{ pathId: 'p', pathName: 'Corridor', index: 2, total: 2 }]);
+    .toEqual([{ pathId: 'p', pathName: 'Corridor', kind: 'regular', index: 2, total: 2 }]);
   expect(pathPointLabels({}, 'b')).toEqual([]);
 });
 
@@ -184,13 +184,18 @@ test('pathPointLabels reports differing indices per path for a shared junction',
     ],
   };
   expect(pathPointLabels(map, 'n-junc')).toEqual([
-    { pathId: 'p-main', pathName: 'Corridor', index: 4, total: 4 },
-    { pathId: 'p-side', pathName: 'Link', index: 2, total: 2 },
+    { pathId: 'p-main', pathName: 'Corridor', kind: 'regular', index: 4, total: 4 },
+    { pathId: 'p-side', pathName: 'Link', kind: 'regular', index: 2, total: 2 },
   ]);
   // Landing keeps its own sequence index.
   expect(pathPointLabels(map, 'n-p3')).toEqual([
-    { pathId: 'p-main', pathName: 'Corridor', index: 3, total: 4 },
+    { pathId: 'p-main', pathName: 'Corridor', kind: 'regular', index: 3, total: 4 },
   ]);
+});
+
+test('pathPointLabels preserves explicit stair category for native survey adapters', () => {
+  expect(pathPointLabels({ paths: [{ id: 'stair', name: 'East stairs', kind: 'stair', nodeIds: ['lower', 'upper'] }] }, 'upper'))
+    .toEqual([{ pathId: 'stair', pathName: 'East stairs', kind: 'stair', index: 2, total: 2 }]);
 });
 
 test('orderSurveyNodes follows first-seen path order, retains manual nodes, drops duplicates', () => {

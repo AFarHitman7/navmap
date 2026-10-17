@@ -1,25 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getPublishedManifestV3 } from './api-v3';
-import type { ManifestV3 } from './contract-v3';
-import { LayerPicker } from './LayerPicker';
-import { MapCanvasV3 } from './MapCanvasV3';
-import { resolveFloorVisibility, type ZoneFloorVisibility } from './floor-visibility';
+import { getPublishedVisitorMap } from './api-v3';
+import type { MapManifest } from './map-contract';
+import { CanvasHost } from './map/CanvasHost';
 import { shortestPathV3 } from './route-v3';
+import { buildDirections } from '../../shared/src/directions';
+import { useGeolocation } from './location/useGeolocation';
+import { containsPoint } from './geo-v3';
 
 export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
-  const [manifest, setManifest] = useState<ManifestV3 | null>(null);
+  const [manifest, setManifest] = useState<MapManifest | null>(null);
+  const [mapName, setMapName] = useState(venueId);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [start, setStart] = useState('');
   const [destination, setDestination] = useState('');
-  const [floorChoices, setFloorChoices] = useState<ZoneFloorVisibility>({});
-  const [showOutdoors, setShowOutdoors] = useState(true);
+  const [manualFrameId, setManualFrameId] = useState<string | null>(null);
+  const [loadedVenueId, setLoadedVenueId] = useState(venueId);
 
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
-    getPublishedManifestV3(venueId, controller.signal).then((map) => {
-      if (active) setManifest(map);
+    getPublishedVisitorMap(venueId, controller.signal).then(({ manifest: map, name }) => {
+      if (active) { setManifest(map); setMapName(name); setLoadedVenueId(venueId); }
     }, (err: unknown) => {
       if (!active) return;
       const detail = err instanceof Error ? err.message : 'Try loading the map again.';
@@ -30,89 +32,131 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
     return () => { active = false; controller.abort(); };
   }, [venueId, attempt]);
 
-  const visibility = useMemo(() => resolveFloorVisibility(manifest?.indoorZones ?? [], floorChoices), [manifest, floorChoices]);
-  const byId = useMemo(() => new Map(manifest?.nodes.map((node) => [node.id, node])), [manifest]);
-  const route = useMemo(() => manifest && start && destination ? shortestPathV3(manifest, start, destination) : null,
-    [manifest, start, destination]);
+  const currentManifest = loadedVenueId === venueId ? manifest : null;
+  const canvasKind = currentManifest?.canvas.kind ?? 'geographic';
+  const geo = useGeolocation({ enabled: currentManifest !== null, canvasKind });
+  const stopGps = geo.stop;
+  // Switching maps or explicitly switching frames cancels any active watch;
+  // the hook also cancels on unmount and canvas-kind switches. Picking a
+  // known start node does not cancel: GPS evidence stays visible separately.
+  useEffect(() => () => { stopGps(); }, [venueId, manualFrameId, stopGps]);
+  const graphNodes = useMemo(() => currentManifest?.nodes ?? [], [currentManifest]);
+  const graphById = useMemo(() => new Map(graphNodes.map((node) => [node.id, node])), [graphNodes]);
+  const visibleNodes = useMemo(() => graphNodes.filter((node) => node.visitorVisible && (!node.generated || currentManifest?.places.some((place) => place.nodeId === node.id))), [graphNodes, currentManifest]);
+  const visibleIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
+  const places = useMemo(() => currentManifest?.places.filter((place) => visibleIds.has(place.nodeId)) ?? [], [currentManifest, visibleIds]);
+  const placeByNodeId = useMemo(() => new Map(places.map((place) => [place.nodeId, place])), [places]);
+  const route = useMemo(() => currentManifest && start && destination && graphById.has(start) && graphById.has(destination)
+    ? shortestPathV3(currentManifest, start, destination) : null, [currentManifest, start, destination, graphById]);
+  const directions = useMemo(() => currentManifest && route ? buildDirections(currentManifest, route) : null, [currentManifest, route]);
 
-  if (!manifest) return <div className="page-state">
-    <h1>Visitor map — {venueId}</h1>
+  if (!currentManifest) return <div className="page-state">
+    <h1>Visitor map — {mapName}</h1>
     {error ? <><p className="error" role="alert">{error}</p>
       <button onClick={() => { setError(''); setManifest(null); setAttempt((value) => value + 1); }}>Try again</button></>
       : <p role="status">Loading published map…</p>}
   </div>;
 
-  const location = (id: string) => {
-    const node = byId.get(id)!;
-    const zone = manifest.indoorZones.find((item) => item.id === node.zoneId);
-    return zone ? `${zone.name} · Floor ${node.z}` : 'Outdoors';
+  const locationLabel = (nodeId: string) => {
+    const node = graphById.get(nodeId);
+    const place = placeByNodeId.get(nodeId);
+    if (place) return place.name;
+    if (node && !node.generated && node.visitorVisible) return node.name;
+    const zone = currentManifest.indoorZones.find((item) => item.id === node?.zoneId);
+    const floor = zone?.floors.find((item) => item.z === node?.z)?.label;
+    return zone ? `${zone.name} · ${floor ?? `Floor ${node?.z ?? 0}`}` : 'Known location';
   };
-  const placeNodes = new Set(manifest.places.map((place) => place.nodeId));
-  const distance = route?.slice(1).reduce((sum, id, index) => sum + Math.min(...manifest.edges
-    .filter((edge) => (edge.from === route[index] && edge.to === id) || (edge.to === route[index] && edge.from === id))
-    .map((edge) => edge.meters)), 0);
+  const startNode = graphById.get(start);
+  const followedFrame = currentManifest.frames.find((frame) => frame.id === startNode?.frameId) ?? currentManifest.frames.find((frame) => frame.zoneId === null) ?? currentManifest.frames[0];
+  const activeFrame = currentManifest.frames.find((frame) => frame.id === manualFrameId) ?? (manualFrameId ? undefined : followedFrame);
+  const visitorChoices = visibleNodes.map((node) => ({ node, label: placeByNodeId.get(node.id)?.name ?? node.name }));
+  const chooseFrame = (frameId: string) => setManualFrameId(frameId);
+  const selectedNode = start && graphById.get(start);
+
+  const boundary = currentManifest.boundary;
+  const gpsOutside = geo.location.kind === 'gps' && boundary?.kind === 'geographic'
+    ? !containsPoint(boundary, geo.location.position.lat, geo.location.position.lng)
+    : false;
+  const gpsDot = geo.location.kind === 'gps'
+    ? { lat: geo.location.position.lat, lng: geo.location.position.lng, accuracyMeters: geo.location.accuracyMeters }
+    : null;
+  const gpsStatus = ((): string | null => {
+    if (canvasKind !== 'geographic') return null;
+    const location = geo.location;
+    if (location.kind === 'gps') {
+      return gpsOutside
+        ? `Outside venue (±${Math.round(location.accuracyMeters)} m). GPS does not set your starting point.`
+        : `You are here (±${Math.round(location.accuracyMeters)} m). GPS does not set your starting point.`;
+    }
+    if (location.kind !== 'unknown') return null;
+    switch (location.reason) {
+      case 'idle': return 'GPS is off. Choose Locate me to show your position.';
+      case 'denied': return 'Location permission denied. Choose a starting point above instead.';
+      case 'timeout': return 'GPS timed out. Choose a starting point above instead.';
+      case 'stale': return 'GPS reading is stale. Choose Locate me again or pick a starting point above.';
+      default: return 'GPS is unavailable. Choose a starting point above instead.';
+    }
+  })();
 
   return <div className="visitor">
     <div className="workspace-heading"><div>
-      <span className="eyebrow">PUBLISHED MAP · VERSION {manifest.version}</span>
-      <h1>Visitor map — {venueId}</h1>
-    </div><p>Choose your starting point and destination.</p></div>
+      <span className="eyebrow">PUBLISHED MAP · VERSION {currentManifest.version}</span>
+      <h1>Visitor map — {mapName}</h1>
+    </div><p>Choose a starting point and destination.</p></div>
     <div className="visitor-layout">
       <aside className="visitor-sidebar">
         <h2>Find your way</h2>
-        {manifest.nodes.length === 0 ? <p className="empty-hint">No path points are available in this published map.</p> : <>
+        {!visibleNodes.length ? <p className="empty-hint">No visitor locations are available in this published map.</p> : <>
           <label>Starting point
             <select aria-label="Starting point" value={start} onChange={(e) => setStart(e.target.value)}>
               <option value="">Choose a starting point</option>
-              {manifest.nodes.map((node) => <option key={node.id} value={node.id}>{node.name} · {location(node.id)}</option>)}
+              {visitorChoices.map(({ node, label }) => <option key={node.id} value={node.id}>{label}</option>)}
             </select>
           </label>
           <label>Destination
             <select aria-label="Destination" value={destination} onChange={(e) => setDestination(e.target.value)}>
               <option value="">Choose a destination</option>
-              {manifest.places.length > 0 && <optgroup label="Places">
-                {manifest.places.map((place) => <option key={place.id} value={place.nodeId}>{place.name} · {location(place.nodeId)}</option>)}
-              </optgroup>}
-              <optgroup label="Path points">
-                {manifest.nodes.filter((node) => !placeNodes.has(node.id)).map((node) =>
-                  <option key={node.id} value={node.id}>{node.name} · {location(node.id)}</option>)}
-              </optgroup>
+              {visitorChoices.map(({ node, label }) => <option key={node.id} value={node.id}>{label}</option>)}
             </select>
           </label>
         </>}
         {start && destination && <section className="route-panel" aria-label="Directions" aria-live="polite">
           <h3>Directions</h3>
-          {!route ? <p className="error" role="alert">No connected route between these points. Choose another destination.</p>
+          {!route ? <p className="error" role="alert">No connected route between these places. Choose another destination.</p>
             : route.length === 1 ? <p className="notice">You’re already at your destination.</p> : <>
-              <p className="route-summary">{Math.round(distance ?? 0)} m · {route.length - 1} connections</p>
-              <ol>{route.map((id, index) => {
-                const node = byId.get(id)!;
-                const previous = index > 0 ? byId.get(route[index - 1]) : undefined;
-                const edge = previous ? manifest.edges.filter((item) => (item.from === previous.id && item.to === id)
-                  || (item.to === previous.id && item.from === id)).sort((a, b) => a.meters - b.meters)[0] : undefined;
-                const instruction = edge?.kind === 'stairs' || edge?.kind === 'elevator'
-                  ? `Take ${edge.kind} to ${location(id)}`
-                  : `${index === 0 ? 'Start at' : index === route.length - 1 ? 'Arrive at' : 'Continue to'} ${node.name} · ${location(id)}`;
-                return <li key={id}>{instruction}
-                  {node.zoneId !== null && <button type="button" className="text-button"
-                    onClick={() => setFloorChoices((choices) => ({ ...choices, [node.zoneId!]: node.z }))}>
-                    Show {location(id)}
-                  </button>}
-                </li>;
-              })}</ol>
-              <p>Switch floors in Layers to see each part of your route.</p>
+              {directions?.totalMeters !== undefined && <p className="route-summary">{Math.round(directions.totalMeters)} m</p>}
+              <ol>{directions?.instructions.map((instruction, index) => <li key={`${instruction.kind}-${instruction.frameId}-${index}`}>
+                {instruction.text}
+                {instruction.frameId !== activeFrame?.id && <button type="button" className="text-button"
+                  onClick={() => chooseFrame(instruction.frameId)}>Show this floor</button>}
+              </li>)}</ol>
             </>}
         </section>}
       </aside>
       <div className="visitor-map">
-        <LayerPicker zones={manifest.indoorZones} visibility={visibility} showOutdoors={showOutdoors}
-          onFloorChange={(id, floor) => setFloorChoices((choices) => ({ ...choices, [id]: floor }))}
-          onOutdoorsChange={setShowOutdoors} />
-        <div className="map-frame">
-          <MapCanvasV3 draft={manifest} selectedZoneId={null} selectedNodeId={destination}
-            zoneFloorVisibility={visibility} showOutdoors={showOutdoors} routeNodeIds={route ?? undefined}
-            onNodeClick={(id) => { if (!start) setStart(id); else setDestination(id); }} />
+        {canvasKind === 'geographic' && <div className="visitor-gps" aria-live="polite">
+          <button type="button" onClick={() => geo.start()} aria-label="Locate me">Locate me</button>
+          {gpsStatus && <p data-testid="gps-status">{gpsStatus}</p>}
+        </div>}
+        <div className="visitor-frame-picker" aria-label="Map layers">
+          <span className="layer-current-frame" aria-live="polite">{activeFrame ? `${currentManifest.indoorZones.find((zone) => zone.id === activeFrame.zoneId)?.name ?? 'Outdoor'} · ${currentManifest.indoorZones.find((zone) => zone.id === activeFrame.zoneId)?.floors.find((floor) => floor.z === activeFrame.z)?.label ?? 'Outdoor'}` : 'Choose a floor'}</span>
+          <label>Manual floor
+            <select aria-label="Manual floor selection" value={manualFrameId ?? ''} onChange={(event) => setManualFrameId(event.target.value || null)}>
+              <option value="">Follow location</option>
+              {currentManifest.frames.map((frame) => <option key={frame.id} value={frame.id}>
+                {currentManifest.indoorZones.find((zone) => zone.id === frame.zoneId)?.name ?? 'Outdoor'} · {currentManifest.indoorZones.find((zone) => zone.id === frame.zoneId)?.floors.find((floor) => floor.z === frame.z)?.label ?? 'Outdoor'}{!frame.background && currentManifest.canvas.kind === 'static' ? ' · no plan' : ''}
+              </option>)}
+            </select>
+          </label>
         </div>
+        {manualFrameId && <button type="button" className="text-button" onClick={() => setManualFrameId(null)}>Resume follow</button>}
+        <div className="map-frame">
+          {activeFrame && <CanvasHost document={currentManifest} activeFrameId={activeFrame.id} mode="navigate" view="visitor"
+            callbacks={{}} gpsDot={gpsDot} selection={selectedNode ? { kind: 'node', id: selectedNode.id } : { kind: 'none' }} />}
+        </div>
+        {start && <div className="visitor-location" aria-label="Current location">
+          Starting from {startNode?.generated && !placeByNodeId.has(start) ? 'Known location' : locationLabel(start)}
+        </div>}
       </div>
     </div>
   </div>;

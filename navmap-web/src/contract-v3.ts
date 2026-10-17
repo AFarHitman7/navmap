@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+// LEGACY V4 contract: preserved as-is for existing readers. New saves use the
+// explicit V5 geographic/static contract in ./map-contract.ts; V4 documents
+// upgrade to V5 in memory only (see upgradeV4Draft/upgradeV4Manifest).
+
 export const boundsV3Schema = z
   .object({
     north: z.number(),

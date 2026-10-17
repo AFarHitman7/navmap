@@ -14,6 +14,7 @@ test('zone clicks preserve placement floor while layers hide other floors and pa
   await expect(page.locator('[data-node="n-a1"]')).toHaveCount(0);
   await page.getByRole('button', { name: 'Select zone Building A', exact: true }).click();
   await page.getByLabel('Placement floor', { exact: true }).selectOption('1');
+  await page.getByText('Layers', { exact: true }).click();
   await page.getByLabel('Visible floor — Building A').selectOption('1');
   await expect(page.locator('[data-node="n-a0"]')).toHaveCount(0);
   await expect(page.locator('[data-node="n-b0"]')).toHaveCount(1);
@@ -41,24 +42,24 @@ test('zone clicks preserve placement floor while layers hide other floors and pa
 test('visitor uses the current venue publicly and switches visible floors along a route', async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.route('**/api/venues/campus/latest', (route) => route.fulfill({ json: { venueId: 'campus', version: 2 } }));
+  await page.route('**/api/venues/campus/latest', (route) => route.fulfill({ json: { venueId: 'campus', version: 2, name: 'Campus Museum' } }));
   await page.route('**/api/venues/campus/versions/2/manifest', (route) => route.fulfill({ json: {
     ...fixture, venueId: 'campus', version: 2, profiles: [],
     places: [{ id: 'landing', name: 'Upper landing', nodeId: 'n-a1', zoneId: 'b-a' }],
   } }));
   await page.goto('/v/campus');
-  await expect(page.getByRole('link', { name: 'Editor', exact: true })).toHaveAttribute('href', '/editor/campus');
+  await expect(page.getByRole('heading', { name: 'Visitor map — Campus Museum' })).toBeVisible();
+  await expect(page.locator('[data-node-id], [data-edge], [data-transition]')).toHaveCount(0);
+  await expect(page.locator('.leaflet-overlay-pane svg path')).toHaveCount(0);
   await page.getByLabel('Starting point', { exact: true }).selectOption('n-out');
   await page.getByLabel('Destination', { exact: true }).selectOption('n-a1');
-  await expect(page.getByText('Take stairs to Building A · Floor 1', { exact: false })).toBeVisible();
-  await expect(page.locator('[data-node="n-a1"]')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Show Building A · Floor 1', exact: true }).click();
-  await expect(page.getByLabel('Visible floor — Building A')).toHaveValue('1');
-  await expect(page.locator('[data-node="n-a1"]')).toHaveCount(1);
-  await expect(page.locator('[data-node="n-a0"]')).toHaveCount(0);
-  await page.getByLabel('Visible floor — Building B').selectOption('hidden');
-  await expect(page.locator('[data-zone="b-b"]')).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath('visitor-route.png'), fullPage: true });
+  await expect(page.getByText(/Take stairs/, { exact: false })).toBeVisible();
+  await page.getByRole('listitem').filter({ hasText: 'Take stairs' }).getByRole('button', { name: 'Show this floor' }).click();
+  await expect(page.locator('.layer-current-frame')).toContainText('Building A · Level 1');
+  await expect(page.getByRole('button', { name: 'Resume follow' })).toBeVisible();
+  await expect(page.locator('[data-node-id], [data-edge], [data-transition]')).toHaveCount(0);
+  await expect(page.locator('.leaflet-overlay-pane svg path')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('visitor-layers.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });
