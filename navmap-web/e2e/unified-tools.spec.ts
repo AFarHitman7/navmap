@@ -94,15 +94,18 @@ test('unified regular paths snap to existing nodes, finish once, and expose no C
 test('existing elevator can be selected, edited, and deleted while stairs stay a separate path action', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('tab', { name: 'Connections' }).click();
   await page.getByRole('button', { name: 'Service elevator' }).click();
   await page.getByLabel('Name').fill('Lift A');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect(page.getByLabel('Name')).toHaveValue('Lift A');
   await page.getByRole('button', { name: 'Delete connection' }).click();
   await expect(page.getByRole('button', { name: 'Lift A' })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Nodes' }).click();
   const nodes = page.getByRole('list', { name: 'Nodes' });
   await expect(nodes.getByRole('button', { name: /Elevator lower/ })).toBeVisible();
   await expect(nodes.getByRole('button', { name: /Elevator upper/ })).toBeVisible();
+  await page.getByRole('tab', { name: 'Connections' }).click();
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect(page.getByRole('button', { name: 'Lift A' })).toBeVisible();
   await page.getByRole('button', { name: 'Redo' }).click();

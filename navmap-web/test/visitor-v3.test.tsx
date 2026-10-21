@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VisitorV3 } from '../src/VisitorV3';
+import { visitorHighlightNode } from '../src/location-view';
 import fixture from '../src/fixtures/unified-v3.json';
 import v5Fixture from '../src/fixtures/map-v5-static.json';
 import geoFixture from '../src/fixtures/map-v5-geographic.json';
@@ -75,18 +76,34 @@ describe('public visitor map', () => {
     const user = userEvent.setup();
     let published = false;
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === '/api/venues/demo') return jsonResponse({ venueId: 'demo', name: 'Harbor Hall' });
       if (url === '/api/venues/demo/latest') return published
-        ? jsonResponse({ venueId: 'demo', version: 1 }) : jsonResponse({ error: 'no published version' }, 404);
+        ? jsonResponse({ venueId: 'demo', version: 1, name: 'Harbor Hall' }) : jsonResponse({ error: 'no published version' }, 404);
       if (url === '/api/venues/demo/versions/1/manifest') return jsonResponse(manifest);
       throw new Error(`Unexpected request: ${url}`);
     }));
     render(<VisitorV3 />);
     expect(screen.getByRole('status')).toHaveTextContent('Loading published map');
+    // The heading uses the public map name, never the raw venue id, even when
+    // no version has been published yet.
+    expect(await screen.findByRole('heading', { name: 'Visitor map — Harbor Hall' })).toBeVisible();
     expect(await screen.findByRole('alert')).toHaveTextContent('Publish it in the editor');
     published = true;
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByLabelText('Starting point')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Visitor map — Harbor Hall' })).toBeVisible();
+  });
+
+  it('shows a plain generic title instead of the raw venue id when no name is available', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === '/api/venues/mystery') return jsonResponse({ error: 'unknown venue' }, 404);
+      if (url === '/api/venues/mystery/latest') return jsonResponse({ error: 'no published version' }, 404);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    render(<VisitorV3 venueId="mystery" />);
+    expect(await screen.findByRole('heading', { name: 'Visitor map' })).toBeVisible();
+    expect(screen.queryByText(/mystery/)).not.toBeInTheDocument();
   });
 
   it('reports disconnected points and an already-reached destination instead of stale directions', async () => {
@@ -103,6 +120,24 @@ describe('public visitor map', () => {
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a0');
     expect(screen.getByText('You’re already at your destination.')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('visitor frame label and highlight', () => {
+  it('names the outdoor frame once instead of repeating the fallback', async () => {
+    const published = { ...geoFixture, venueId: 'demo', version: 4, profiles: [] };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/latest')
+      ? jsonResponse({ venueId: 'demo', version: 4, name: 'Geo Hall' }) : jsonResponse(published)));
+    render(<VisitorV3 />);
+    await screen.findByLabelText('Destination');
+    expect(document.querySelector('.layer-current-frame')!.textContent?.trim()).toBe('Outdoor');
+  });
+
+  it('highlights the chosen destination over the starting point', () => {
+    const has = (id: string) => id === 'start' || id === 'dest';
+    expect(visitorHighlightNode('start', 'dest', has)).toBe('dest');
+    expect(visitorHighlightNode('start', '', has)).toBe('start');
+    expect(visitorHighlightNode('', '', has)).toBeNull();
   });
 });
 

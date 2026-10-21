@@ -38,36 +38,39 @@ function pathMeta(path: MapPath, document: MapDraft | MapManifest): string {
 }
 
 export function ObjectBrowser({ document, selection, onSelect }: Props) {
-  const [tab, setTab] = useState<'nodes' | 'paths'>('nodes');
+  const [tab, setTab] = useState<'nodes' | 'paths' | 'connections'>('nodes');
   const [query, setQuery] = useState('');
   const needle = text(query);
   const nodes = useMemo(() => document.nodes.filter((node) => !node.generated)
     .filter((node) => !needle || text(`${node.name} ${nodeKind(node, document)} ${floorLabel(node, document)}`).includes(needle)), [document, needle]);
   const paths = useMemo(() => (document.paths ?? []).filter((path) => !needle || text(`${path.name} ${pathMeta(path, document)}`).includes(needle)), [document, needle]);
   const transitions = useMemo(() => document.transitions.filter((item) => !needle || text(`${transitionTitle(item, document)} ${transitionMeta(item)}`).includes(needle)), [document, needle]);
+  const transitionItem = (item: MapDraft['transitions'][number]) => <li key={item.id}><button type="button" aria-pressed={selection.kind === 'transition' && selection.id === item.id} onClick={() => onSelect({ kind: 'transition', id: item.id })}>
+    <span>{transitionTitle(item, document)}<small>{transitionMeta(item)}</small></span><span aria-hidden="true">›</span>
+  </button></li>;
   return <section className="object-browser" aria-label="Map objects">
     <h2>Objects</h2>
     <div className="object-browser-tabs" role="tablist" aria-label="Object type">
       <button type="button" role="tab" aria-selected={tab === 'nodes'} onClick={() => setTab('nodes')}>Nodes</button>
       <button type="button" role="tab" aria-selected={tab === 'paths'} onClick={() => setTab('paths')}>Paths</button>
+      <button type="button" role="tab" aria-selected={tab === 'connections'} onClick={() => setTab('connections')}>Connections</button>
     </div>
     <label className="object-browser-search">Search objects<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, type, or floor" /></label>
-    {tab === 'nodes' ? <ul className="object-browser-list" aria-label="Nodes">
+    {tab === 'nodes' && <ul className="object-browser-list" aria-label="Nodes">
       {nodes.map((node) => <li key={node.id}><button type="button" aria-pressed={selection.kind === 'node' && selection.id === node.id} onClick={() => onSelect({ kind: 'node', id: node.id })}>
         <span>{node.name}<small>{nodeKind(node, document)} · {floorLabel(node, document)}</small></span><span aria-hidden="true">›</span>
       </button></li>)}
-      {transitions.map((item) => <li key={item.id}><button type="button" aria-pressed={selection.kind === 'transition' && selection.id === item.id} onClick={() => onSelect({ kind: 'transition', id: item.id })}>
-        <span>{transitionTitle(item, document)}<small>{transitionMeta(item)}</small></span><span aria-hidden="true">›</span>
-      </button></li>)}
-      {!nodes.length && !transitions.length && <li className="object-browser-empty">No matching nodes.</li>}
-    </ul> : <ul className="object-browser-list" aria-label="Paths">
+      {!nodes.length && <li className="object-browser-empty">No matching nodes.</li>}
+    </ul>}
+    {tab === 'paths' && <ul className="object-browser-list" aria-label="Paths">
       {paths.map((path) => <li key={path.id}><button type="button" aria-pressed={selection.kind === 'path' && selection.id === path.id} onClick={() => onSelect({ kind: 'path', id: path.id })}>
         <span>{path.name}<small>{pathMeta(path, document)}</small></span><span aria-hidden="true">›</span>
       </button></li>)}
-      {transitions.map((item) => <li key={item.id}><button type="button" aria-pressed={selection.kind === 'transition' && selection.id === item.id} onClick={() => onSelect({ kind: 'transition', id: item.id })}>
-        <span>{transitionTitle(item, document)}<small>{transitionMeta(item)}</small></span><span aria-hidden="true">›</span>
-      </button></li>)}
-      {!paths.length && !transitions.length && <li className="object-browser-empty">No matching paths.</li>}
+      {!paths.length && <li className="object-browser-empty">No matching paths.</li>}
+    </ul>}
+    {tab === 'connections' && <ul className="object-browser-list" aria-label="Connections">
+      {transitions.map(transitionItem)}
+      {!transitions.length && <li className="object-browser-empty">No matching connections.</li>}
     </ul>}
   </section>;
 }

@@ -23,6 +23,18 @@ describe('stair path contract', () => {
   });
 });
 
+describe('v5 publish prerequisites', () => {
+  it('refuses to publish a map with no visitor-visible location', () => {
+    const draft = staticDraft();
+    const empty = { ...draft, nodes: draft.nodes.map((node) => ({ ...node, visitorVisible: false })), places: [] };
+    expect(validatePublishV5(parseMapDraft(empty))).toContain('map needs at least one visitor-visible location before publishing');
+  });
+
+  it('still accepts a populated map', () => {
+    expect(validatePublishV5(parseMapDraft(staticDraft()))).toEqual([]);
+  });
+});
+
 const geographicJson = JSON.parse(
   readFileSync(new URL('../src/fixtures/map-v5-geographic.json', import.meta.url), 'utf8'),
 ) as unknown;

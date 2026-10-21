@@ -233,13 +233,19 @@ export function validateGraphV5(draft: MapDraft): string[] {
 
 /**
  * Publish-time V5 checks: the shared graph/frame geometry checks plus
- * publication-only prerequisite: the geographic boundary requirement. Static
+ * publication-only prerequisites: a geographic boundary and at least one
+ * visitor-visible location (otherwise the published map is a dead end). Static
  * asset validation is performed by publishV3 against venue-owned bytes.
  */
 export function validatePublishV5(draft: MapDraft): string[] {
   const errors: string[] = [];
   if (draft.canvas.kind === 'geographic' && draft.boundary === null) {
     errors.push('venue needs an outdoor boundary');
+  }
+  const hasVisitorLocation = draft.nodes.some((node) => node.visitorVisible
+    && (!node.generated || draft.places.some((place) => place.nodeId === node.id)));
+  if (!hasVisitorLocation) {
+    errors.push('map needs at least one visitor-visible location before publishing');
   }
   errors.push(...validateGraphV5(draft));
   return errors;

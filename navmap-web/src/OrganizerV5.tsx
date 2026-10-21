@@ -10,6 +10,7 @@ import { LayerPicker } from './LayerPicker';
 import { useBlocker } from 'react-router-dom';
 import { UnsavedChangesDialog } from './editor/UnsavedChangesDialog';
 import { Inspector } from './editor-v3/inspectors/Inspector';
+import { PublishConfirmDialog } from './editor-v3/PublishConfirmDialog';
 import { ToolMenu } from './editor-v3/ToolMenu';
 import { ObjectBrowser } from './ObjectBrowser';
 import { endpointAt, endpointForNode, selectionExists, toolLabel, type InspectorView, type PendingGesture, type Selection, type Tool } from './editor-v3/tool-state';
@@ -57,6 +58,7 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
   const doc = useEditorDocument(initial);
   const draft = doc.document;
   const blocker = useBlocker(doc.dirty || gesture !== null);
+  const [confirmPublish, setConfirmPublish] = useState(false);
   const frame = draft.frames.find((candidate) => candidate.id === activeFrameId);
   const canAuthor = enabled && !busy && Boolean(frame) && (draft.canvas.kind !== 'static' || Boolean(frame?.background));
   function chooseTool(next: Tool) {
@@ -181,7 +183,12 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
   }
   async function saveAndContinue() { if (gesture) return; if (await save()) blocker.proceed?.(); }
   async function publish() {
-    if (!enabled || busy || gesture) return;
+    setConfirmPublish(false);
+    if (gesture) { setStatus('Finish or discard pending input before publishing.'); return; }
+    if (!enabled || busy) return;
+    // Publishing reads the persisted draft, so unsaved edits must be saved first
+    // or the published version silently misses them.
+    if (doc.dirty && !await save()) return;
     setBusy(true); setStatus('Publishing…');
     try { const result = await publishV5(draft.venueId); setStatus(`Published version ${result.manifest.version}`); }
     catch (cause) { setStatus(cause instanceof Error ? cause.message : 'Publish failed'); }
@@ -196,16 +203,20 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
         changed = doc.commit('Draw path', (current) => addRegularPath(current, gesture.vertices, gesture.name.trim() || 'Path'));
       } else if (gesture.endpoints.length === 2) {
         const endpoints = [...gesture.endpoints];
-        if (gesture.kind === 'entrance') changed = doc.commit('Add entrance', (current) => addEntrance(current, endpoints[0]!, endpoints[1]!, gesture.name));
-        else {
-          const zFor = (endpoint: (typeof endpoints)[number], current: MapDraft) => {
-            if (typeof endpoint === 'string') return current.nodes.find((node) => node.id === endpoint)?.z ?? 0;
-            if ('nodeId' in endpoint) return current.nodes.find((node) => node.id === endpoint.nodeId)?.z ?? 0;
-            return current.frames.find((item) => item.id === endpoint.frameId)?.z ?? 0;
-          };
-          endpoints.sort((a, b) => zFor(a, draft) - zFor(b, draft));
-          changed = doc.commit('Add stairs', (current) => addStair(current, endpoints[0]!, endpoints[1]!, gesture.name));
-        }
+        const zFor = (endpoint: (typeof endpoints)[number], current: MapDraft) => {
+          if (typeof endpoint === 'string') return current.nodes.find((node) => node.id === endpoint)?.z ?? 0;
+          if ('nodeId' in endpoint) return current.nodes.find((node) => node.id === endpoint.nodeId)?.z ?? 0;
+          return current.frames.find((item) => item.id === endpoint.frameId)?.z ?? 0;
+        };
+        // doc.commit swallows thrown updater errors, so validate on the current
+        // snapshot first to surface the specific, actionable message.
+        const build = (current: MapDraft) => {
+          if (gesture.kind === 'entrance') return addEntrance(current, endpoints[0]!, endpoints[1]!, gesture.name);
+          endpoints.sort((a, b) => zFor(a, current) - zFor(b, current));
+          return addStair(current, endpoints[0]!, endpoints[1]!, gesture.name);
+        };
+        build(draft);
+        changed = doc.commit(gesture.kind === 'entrance' ? 'Add entrance' : 'Add stairs', build);
       }
       if (!changed) { setStatus('Could not finish. Check the endpoints and assigned frames; no saved objects were changed.'); return; }
       setGesture(null); setTool({ kind: 'select' }); setSelection({ kind: 'none' }); setStatus(gesture.kind === 'path' ? 'Path added' : `${gesture.kind === 'stair' ? 'Stairs' : 'Entrance'} added`);
@@ -221,6 +232,8 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
     </header>
     <UnsavedChangesDialog open={blocker.state === 'blocked'} busy={busy} saveDisabled={gesture !== null} saveError={gesture ? 'Finish or discard pending input before saving.' : status.startsWith('Save failed') ? status : null}
       onSave={() => void saveAndContinue()} onDiscard={() => blocker.proceed?.()} onCancel={() => blocker.reset?.()} />
+    <PublishConfirmDialog open={confirmPublish} busy={busy} dirty={doc.dirty} summary={{ nodes: draft.nodes.length, transitions: draft.transitions.length, places: draft.places.length }}
+      onConfirm={() => void publish()} onCancel={() => setConfirmPublish(false)} />
     {!enabled && <p className="notice" role="status">V5 authoring is disabled by the server. This map is read-only; the legacy editor remains available for V4 maps.</p>}
     <section className="v5-editor-layout">
       <div className="v5-canvas-column">
@@ -248,10 +261,10 @@ function V5Editor({ initial, enabled, mapName, tool, setTool, selection, setSele
       <ObjectBrowser document={draft} selection={selection} onSelect={(next) => { setSelection(next); setView('build'); setTool({ kind: 'select' }); }} />
       <Inspector document={draft} tool={tool} selection={selection} activeFrameId={activeFrameId} commit={doc.commit} busy={busy || !enabled}
         onSelectionChange={setSelection} onToolChange={setTool} gesture={gesture} onGestureChange={setGesture} nodeName={nodeName} onNodeNameChange={setNodeName}
-        onFinishGesture={finishGesture} onCancelGesture={cancelGesture} view={view} onViewChange={setView} onPublish={() => void publish()}
+        onFinishGesture={finishGesture} onCancelGesture={cancelGesture} view={view} onViewChange={setView} onPublish={() => setConfirmPublish(true)}
         floorSettings={draft.canvas.kind === 'static' && enabled ? <LayoutImportPanel venueId={draft.venueId} draft={draft} sessionGeneration={doc.sessionGeneration} commit={doc.commit} />
           : draft.canvas.kind === 'geographic' ? <p>Geographic maps use OSM tiles. GPS is never used to assign indoor floors.</p> : <p>V5 authoring is disabled by the server.</p>} />
     </section>
-    <div className="v5-publish-bar"><span>{status || (doc.dirty ? 'Draft has unsaved changes' : 'All changes saved')}</span><button type="button" className="primary" disabled={!enabled || busy || gesture !== null} onClick={() => void publish()}>Publish</button></div>
+    <div className="v5-publish-bar"><span>{status || (doc.dirty ? 'Draft has unsaved changes' : 'All changes saved')}</span><button type="button" className="primary" disabled={!enabled || busy || gesture !== null} onClick={() => setConfirmPublish(true)}>Publish</button></div>
   </main>;
 }

@@ -85,6 +85,24 @@ describe('logical editor objects', () => {
     expect(entrance.transitions.at(-1)?.kind).toBe('entrance');
   });
 
+  it('accepts an entrance whose points were clicked outdoors first', () => {
+    const base = staticDraft();
+    const outdoorReady = { ...base, frames: base.frames.map((frame) => frame.id === 'frame-outdoor-z0'
+      ? { ...frame, background: { assetId: 'outdoor', width: 100, height: 100, sha256: 'a'.repeat(64), byteLength: 1000 } } : frame) };
+    const outside = { frameId: 'frame-outdoor-z0', position: { kind: 'local' as const, x: 0.1, y: 0.1 }, name: 'Outside' };
+    const entrance = addEntrance(outdoorReady, outside, 's-a0', 'North entrance');
+    const transition = entrance.transitions.at(-1)!;
+    expect(transition.kind).toBe('entrance');
+    expect(transition.nodeIds).toContain('s-a0');
+    const other = entrance.nodes.find((node) => node.id === transition.nodeIds.find((id) => id !== 's-a0'))!;
+    expect(other.zoneId).toBeNull();
+    parseMapDraft(entrance);
+  });
+
+  it('explains that an entrance needs one indoor and one outdoor point', () => {
+    expect(() => addEntrance(staticDraft(), 's-a0', 's-a0b', 'Indoor only')).toThrow(/one indoor landing and one outdoor point/);
+  });
+
   it('reuses an existing path junction for a positioned endpoint without duplicating its node ID', () => {
     const draft = staticDraft();
     const pathBase = { ...draft, edges: [], paths: [], transitions: [] };

@@ -16,6 +16,25 @@ function endpointLabel(endpoint: Endpoint, role: string, document: InspectorProp
   return `${role} · ${node ? `${node.name} · ` : ''}${location}`;
 }
 
+/** The indoor/outdoor or floor position of a chosen endpoint, or null when it cannot be resolved yet. */
+function endpointRole(endpoint: Endpoint | undefined, subtype: 'entrance' | 'stair', other: Endpoint | undefined, document: InspectorProps['document']): string | null {
+  if (!endpoint) return null;
+  const position = (value: Endpoint) => {
+    const nodeId = typeof value === 'string' ? value : 'nodeId' in value ? value.nodeId : undefined;
+    const node = nodeId ? document.nodes.find((item) => item.id === nodeId) : undefined;
+    const frameId = node?.frameId ?? (typeof value === 'object' && 'frameId' in value ? value.frameId : undefined);
+    const frame = frameId ? document.frames.find((item) => item.id === frameId) : undefined;
+    const zoneId = node ? node.zoneId : frame?.zoneId ?? null;
+    const z = node ? node.z : frame?.z ?? 0;
+    return { indoor: zoneId !== null, z };
+  };
+  const here = position(endpoint);
+  if (subtype === 'entrance') return here.indoor ? 'Indoor landing' : 'Outdoor landing';
+  const there = other ? position(other) : null;
+  if (!there) return null;
+  return here.z <= there.z ? 'Lower landing' : 'Upper landing';
+}
+
 export function NodeInspector(props: InspectorProps) {
   const selectedId = props.selection.kind === 'node' ? props.selection.id : undefined;
   const node = selectedId ? props.document.nodes.find((item) => item.id === selectedId) : undefined;
@@ -51,8 +70,17 @@ function NodeInspectorForm(props: InspectorProps) {
     return <section className="v5-inspector-form" aria-labelledby="node-inspector-title">
       <p className="v5-context-kicker">Node · {subtype === 'entrance' ? 'Entrance' : 'Stair'}</p><h2 id="node-inspector-title">{subtype === 'entrance' ? 'Entrance' : 'Stair connection'}</h2>
       <label>{subtype === 'entrance' ? 'Entrance name' : 'Stair name'}<input value={current?.name ?? ''} disabled={busy} onChange={(event) => setNameValue(event.currentTarget.value)} /></label>
-      <ol className="v5-endpoint-steps">{roles.map((role, index) => <li key={role} className={count > index ? 'complete' : ''}>{count > index && current ? `${endpointLabel(current.endpoints[index]!, role, document)} · selected` : `${role}${index === count ? ' · click an existing node or map position' : ''}`}</li>)}</ol>
-      {subtype === 'entrance' && <p>An entrance joins an indoor ground-floor landing to an outdoor point. Existing nodes are reused.</p>}
+      <ol className="v5-endpoint-steps">{roles.map((role, index) => {
+        const endpoint = current?.endpoints[index];
+        const chosen = endpointRole(endpoint, subtype as 'entrance' | 'stair', current?.endpoints[1 - index], document);
+        const other = endpointRole(current?.endpoints[1 - index], subtype as 'entrance' | 'stair', endpoint, document);
+        const expected = subtype === 'entrance'
+          ? other === 'Indoor landing' ? 'Outdoor landing' : other === 'Outdoor landing' ? 'Indoor landing' : role
+          : other === 'Lower landing' ? 'Upper landing' : other === 'Upper landing' ? 'Lower landing' : role;
+        const shown = chosen ?? expected;
+        return <li key={role} className={count > index ? 'complete' : ''}>{count > index ? `${endpointLabel(endpoint!, shown, document)} · selected` : `${shown}${index === count ? ' · click an existing node or map position' : ''}`}</li>;
+      })}</ol>
+      {subtype === 'entrance' && <p>An entrance joins an indoor ground-floor landing to an outdoor point. Click either point first; existing nodes are reused.</p>}
       {subtype === 'stair' && <p>Choose two landings in one building on different floors. Existing nodes are reused; survey node IDs stay attached.</p>}
       <div className="v5-action-row"><button type="button" className="primary" disabled={busy || count !== 2} onClick={onFinishGesture}>Finish {subtype}</button>
         <button type="button" disabled={busy || count === 0} onClick={onCancelGesture}>Discard</button></div>
@@ -60,8 +88,10 @@ function NodeInspectorForm(props: InspectorProps) {
     </section>;
   }
   if (!node) return <section className="v5-inspector-form"><h2>Node</h2><p>Select a node on the map to edit its properties.</p></section>;
+  const selectedZone = node.zoneId ? document.indoorZones.find((zone) => zone.id === node.zoneId) : undefined;
+  const selectedFloor = selectedZone?.floors.find((floor) => floor.z === node.z)?.label ?? (selectedZone ? `Floor ${node.z}` : 'Ground');
   return <section className="v5-inspector-form node-inspector" aria-labelledby="node-inspector-title">
-    <p className="v5-context-kicker">Selected node · {node.zoneId ? document.indoorZones.find((zone) => zone.id === node.zoneId)?.name : 'Outdoor'} · {node.z}</p>
+    <p className="v5-context-kicker">Selected node · {selectedZone?.name ?? 'Outdoor'} · {selectedFloor}</p>
     <h2 id="node-inspector-title">Node properties</h2>
     <form onSubmit={saveName}><label>Name<input required value={name} disabled={busy} onChange={(event) => setName(event.currentTarget.value)} /></label><button type="submit" disabled={busy}>Save name</button></form>
     <p>{node.generated ? 'Generated route point' : 'Authored point'}</p>

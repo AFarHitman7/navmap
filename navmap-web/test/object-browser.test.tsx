@@ -14,6 +14,17 @@ describe('ObjectBrowser', () => {
     expect(screen.queryByText('Ground lobby')).toBeNull();
   });
 
+  it('lists a transition once, on its own Connections tab', () => {
+    const select = vi.fn();
+    render(<ObjectBrowser document={staticDraft()} selection={{ kind: 'none' }} onSelect={select} />);
+    expect(screen.queryByText('Stair transition')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Paths' }));
+    expect(screen.queryByText('Stair transition')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Connections' }));
+    fireEvent.click(screen.getByRole('button', { name: /Stair transition/ }));
+    expect(select).toHaveBeenCalledWith({ kind: 'transition', id: 'tr-s-a0-s-a1' });
+  });
+
   it('shows named logical paths and selects them as whole objects', () => {
     const select = vi.fn();
     render(<ObjectBrowser document={staticDraft()} selection={{ kind: 'none' }} onSelect={select} />);
@@ -21,6 +32,5 @@ describe('ObjectBrowser', () => {
     expect(screen.getByText('Ground corridor')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Ground corridor/ }));
     expect(select).toHaveBeenCalledWith({ kind: 'path', id: 'corr-ground' });
-    expect(screen.getByText('Stair transition')).toBeTruthy();
   });
 });

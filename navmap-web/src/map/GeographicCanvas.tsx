@@ -23,13 +23,17 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
   const mapRef = useRef<L.Map | null>(null);
   const layers = useRef<L.LayerGroup | null>(null);
   const fitFrameRef = useRef('');
+  const fitBoundaryRef = useRef('');
   const [mapReady, setMapReady] = useState(false);
   const [tileError, setTileError] = useState(false);
   const propsRef = useRef({ document, activeFrameId, mode, callbacks });
   useLayoutEffect(() => { propsRef.current = { document, activeFrameId, mode, callbacks }; }, [document, activeFrameId, mode, callbacks]);
   useEffect(() => {
     if (!host.current) return;
-    const map = L.map(host.current, { maxZoom: 24, zoomSnap: 0.25 });
+    // A new geographic map has no frames and no boundary yet. Seed a world view
+    // so OSM tiles always render and the organizer can navigate to the venue,
+    // instead of staring at a blank gray canvas with zero tile requests.
+    const map = L.map(host.current, { center: [20, 0], zoom: 2, maxZoom: 24, zoomSnap: 0.25 });
     const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 24, maxNativeZoom: 19, attribution: '&copy; OpenStreetMap contributors' });
     tiles.on('tileerror', () => setTileError(true)).on('tileload', () => setTileError(false)).addTo(map);
     const group = L.layerGroup().addTo(map);
@@ -56,11 +60,23 @@ export function GeographicCanvas({ document, activeFrameId, mode, callbacks, vie
     if (!mapReady || !map || !group) return;
     group.clearLayers();
     const frame = document.frames.find((item) => item.id === activeFrameId);
-    if (view === 'visitor' && frame?.bounds.kind === 'geographic') {
-      map.fitBounds([[frame.bounds.south, frame.bounds.west], [frame.bounds.north, frame.bounds.east]], { animate: false });
-    } else if (frame?.bounds.kind === 'geographic' && fitFrameRef.current !== frame.id) {
-      map.fitBounds([[frame.bounds.south, frame.bounds.west], [frame.bounds.north, frame.bounds.east]], { animate: false });
-      fitFrameRef.current = frame.id;
+    const frameBounds = frame && frame.bounds.kind === 'geographic' ? frame.bounds : undefined;
+    const boundary = document.boundary;
+    if (view === 'visitor' && frame && frameBounds) {
+      map.fitBounds([[frameBounds.south, frameBounds.west], [frameBounds.north, frameBounds.east]], { animate: false });
+    } else if (frame && frameBounds) {
+      if (fitFrameRef.current !== frame.id) {
+        map.fitBounds([[frameBounds.south, frameBounds.west], [frameBounds.north, frameBounds.east]], { animate: false });
+        fitFrameRef.current = frame.id;
+      }
+    } else if (boundary?.kind === 'geographic') {
+      // No active geographic frame: fit the authored extent so the basemap
+      // shows the venue instead of leaving the map without a center.
+      const key = `${boundary.north}:${boundary.south}:${boundary.east}:${boundary.west}`;
+      if (fitBoundaryRef.current !== key) {
+        map.fitBounds([[boundary.south, boundary.west], [boundary.north, boundary.east]], { animate: false });
+        fitBoundaryRef.current = key;
+      }
     }
     const projection = projectMap(document, view, selection);
     const nodes = [...projection.nodes, ...(view === 'editor' && showReferencePoints ? document.nodes.filter((node) => node.generated) : [])]

@@ -18,6 +18,8 @@ describe('V3-only app shell', () => {
     const user = userEvent.setup();
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url === '/api/admin/venues/demo/draft-v3') return jsonResponse(fixture);
+      if (url === '/api/admin/venues') return jsonResponse({ error: 'login required' }, 401);
+      if (url === '/api/capabilities') return jsonResponse({ mapV5AuthoringEnabled: false });
       if (url === '/api/venues/demo/latest') return jsonResponse({ venueId: 'demo', version: 1 });
       if (url === '/api/venues/demo/versions/1/manifest') return jsonResponse({ ...fixture, version: 1, profiles: [],
         places: [{ id: 'p-lobby', name: 'Lobby', nodeId: 'n-a0', zoneId: 'b-a' },
@@ -29,8 +31,14 @@ describe('V3-only app shell', () => {
 
     expect(await screen.findByRole('button', { name: 'Draw boundary' })).toBeVisible();
     expect(screen.queryByRole('link', { name: 'Maps' })).not.toBeInTheDocument();
+    // Organizer chrome surfaces the admin map list; visitors must not see it.
+    expect(await screen.findByText(/login required/)).toBeVisible();
     await user.click(screen.getByRole('link', { name: 'Visitor' }));
     expect(await screen.findByRole('heading', { name: 'Visitor map — demo' })).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Editor' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh maps' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New map' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/login required/)).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('Starting point'), 'n-a0');
     await user.selectOptions(screen.getByLabelText('Destination'), 'n-a1');
     expect(await screen.findByText(/Take stairs to Upper landing/)).toBeVisible();

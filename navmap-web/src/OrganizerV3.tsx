@@ -731,6 +731,7 @@ export function OrganizerV3({ venueId = 'demo' }: { venueId?: string }) {
                 type="button"
                 aria-pressed={mode === 'move'}
                 disabled={!node}
+                title={!node ? 'Select a point on the map first to move it.' : undefined}
                 onClick={() => {
                   setMode('move');
                   setFrom('');

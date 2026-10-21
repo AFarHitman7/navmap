@@ -41,6 +41,18 @@ function loadManifestJson(db: DatabaseSync, venueId: string, version: number): s
 export function registerPublicRoutes(app: FastifyInstance, db: DatabaseSync, opts: { dataDir: string }): void {
   app.get('/api/capabilities', async () => ({ mapV5AuthoringEnabled: isV5AuthoringEnabled() }));
 
+  // Public map name for a known venue, available even before the first publish
+  // so the visitor heading never falls back to the raw venue id.
+  app.get('/api/venues/:venueId', async (req, reply) => {
+    const { venueId } = req.params as { venueId: string };
+    try { normalizeVenueId(venueId); }
+    catch { return reply.code(404).send({ error: 'unknown venue' }); }
+    const name = getVenueName(db, venueId);
+    if (name === null) return reply.code(404).send({ error: 'unknown venue' });
+    reply.header('cache-control', 'no-store');
+    return { venueId, name };
+  });
+
   app.get('/api/venues/:venueId/latest', async (req, reply) => {
     const { venueId } = req.params as { venueId: string };
     try { normalizeVenueId(venueId); }

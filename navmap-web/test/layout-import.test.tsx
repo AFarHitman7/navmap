@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { LayoutImportPanel } from '../src/LayoutImportPanel';
 import { readLayoutSource, withPageTimeout } from '../src/pdf-import';
 import { staticDraft } from '../src/fixtures/map-v5';
+import { emptyMapDraft } from '../src/map-geometry';
 import { useEditorDocument } from '../src/editor-v3/useEditorDocument';
 
 // jsdom has no Worker API; pdf.js runs its actual bundled worker module via
@@ -400,5 +401,28 @@ describe('bounded layout source conversion', () => {
     await waitFor(() => expect(screen.queryByText('Preparing floor plan…')).not.toBeInTheDocument());
     expect(screen.getByText('empty')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+  });
+
+  it('bootstraps the first floor for a blank static map and undoes it in one transaction', async () => {
+    function EditorHarness() {
+      const editor = useEditorDocument(emptyMapDraft('demo-v5-static', 'static'));
+      return <>
+        <LayoutImportPanel venueId={editor.document.venueId} draft={editor.document} sessionGeneration={editor.sessionGeneration} commit={editor.commit} />
+        <output>{`${editor.document.frames.length}:${editor.document.indoorZones.map((zone) => zone.name).join(',')}`}</output>
+        <button type="button" disabled={!editor.canUndo} onClick={editor.undo}>Undo floor</button>
+      </>;
+    }
+    const user = userEvent.setup();
+    render(<EditorHarness />);
+    expect(screen.getByText('Add a floor before assigning a layout.')).toBeVisible();
+    expect(screen.getByText('0:')).toBeVisible();
+    await user.type(screen.getByLabelText('Building name'), 'Harbor Hall');
+    await user.click(screen.getByRole('button', { name: 'Add floor' }));
+    expect(await screen.findByText('1:Harbor Hall')).toBeVisible();
+    expect(screen.queryByText('Add a floor before assigning a layout.')).not.toBeInTheDocument();
+    expect(screen.getByText('Some floors still need a background before points can be placed.')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Undo floor' }));
+    expect(screen.getByText('0:')).toBeVisible();
+    expect(screen.getByText('Add a floor before assigning a layout.')).toBeVisible();
   });
 });

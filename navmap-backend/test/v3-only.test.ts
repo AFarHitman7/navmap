@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { initializeSchema } from '../src/db.js';
 import { login, testContext, discardDb } from './helpers.js';
+import { createVenue } from '../src/venues.js';
 
 describe('V3-only API', () => {
   it('refuses to initialize over legacy draft tables instead of retaining legacy data', () => {
@@ -66,6 +67,27 @@ describe('V3-only API', () => {
         .run('demo', 1, JSON.stringify({ schemaVersion: 2, venueId: 'demo', version: 1 }));
       const unsupported = await app.inject({ method: 'GET', url: '/api/venues/demo/versions/1/manifest' });
       expect(unsupported.statusCode).toBe(415);
+    } finally {
+      discardDb(db);
+    }
+  });
+
+  it('exposes a public venue name even before the first publish', async () => {
+    const { db, app } = testContext();
+    try {
+      const venue = createVenue(db, 'Harbor Hall', 'geographic');
+
+      const named = await app.inject({ method: 'GET', url: `/api/venues/${venue.id}` });
+      expect(named.statusCode).toBe(200);
+      expect(named.json()).toEqual({ venueId: venue.id, name: 'Harbor Hall' });
+      expect(named.headers['cache-control']).toBe('no-store');
+
+      // The name is available although no version has been published yet.
+      const latest = await app.inject({ method: 'GET', url: `/api/venues/${venue.id}/latest` });
+      expect(latest.statusCode).toBe(404);
+
+      const unknown = await app.inject({ method: 'GET', url: '/api/venues/does-not-exist' });
+      expect(unknown.statusCode).toBe(404);
     } finally {
       discardDb(db);
     }

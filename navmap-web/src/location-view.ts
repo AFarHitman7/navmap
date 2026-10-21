@@ -84,3 +84,13 @@ export function isSecureContextForGeolocation(env?: SecureEnv): boolean {
   if (isSecureContext) return true;
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
+
+/**
+ * The node a visitor map should emphasize: the chosen destination when set,
+ * otherwise the starting point. Returns null when neither resolves.
+ */
+export function visitorHighlightNode(start: string, destination: string, has: (nodeId: string) => boolean): string | null {
+  if (destination && has(destination)) return destination;
+  if (start && has(start)) return start;
+  return null;
+}

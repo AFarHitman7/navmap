@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet, RouterProvider, createBrowserRouter, useOutletContext, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, RouterProvider, createBrowserRouter, useLocation, useOutletContext, useParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { Icon } from './editor/Icon';
 import { OrganizerV3 } from './OrganizerV3';
@@ -10,6 +10,10 @@ import { MapPicker } from './maps/MapPicker';
 
 function Layout() {
   const { venueId = 'demo' } = useParams();
+  const { pathname } = useLocation();
+  // The public visitor route is unauthenticated, so it never renders the
+  // organizer navigation or the admin map picker (which would surface a 401).
+  const isVisitorRoute = pathname === '/v' || pathname.startsWith('/v/');
   const [mapName, setMapName] = useState('');
   return (
     <div className="app">
@@ -22,11 +26,15 @@ function Layout() {
             navmap<span className="brand-dot">.</span>
           </span>
         </Link>
-        <nav aria-label="App navigation">
-          <NavLink to={venueId === 'demo' ? '/' : `/editor/${encodeURIComponent(venueId)}`} end>Editor</NavLink>
-          <NavLink to={`/v/${encodeURIComponent(venueId)}`}>Visitor</NavLink>
-        </nav>
-        <MapPicker currentId={venueId} onCurrentNameChange={setMapName} />
+        {!isVisitorRoute && (
+          <>
+            <nav aria-label="App navigation">
+              <NavLink to={venueId === 'demo' ? '/' : `/editor/${encodeURIComponent(venueId)}`} end>Editor</NavLink>
+              <NavLink to={`/v/${encodeURIComponent(venueId)}`}>Visitor</NavLink>
+            </nav>
+            <MapPicker currentId={venueId} onCurrentNameChange={setMapName} />
+          </>
+        )}
         <span className="header-caption">VENUE WAYFINDING</span>
       </header>
       <main>

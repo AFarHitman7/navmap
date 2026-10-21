@@ -50,3 +50,5 @@ navmap-mobile/android/.gradle/
 
 # Local agent working files (docs/superpowers stays tracked)
 .superpowers/
+docs/issues/
+.commandcode/

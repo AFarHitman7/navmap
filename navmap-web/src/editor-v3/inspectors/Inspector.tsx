@@ -37,7 +37,7 @@ function PlaceView({ document, commit, busy }: InspectorProps) {
     <form onSubmit={save}><h3>{current ? 'Edit place' : 'Add place'}</h3>
       <label>Place name<input required value={name} disabled={busy} onChange={(event) => setName(event.currentTarget.value)} /></label>
       <label>Indoor node<select required value={nodeId} disabled={busy} onChange={(event) => setNodeId(event.currentTarget.value)}>
-        <option value="">Choose a node</option>{document.nodes.filter((node) => node.zoneId !== null && (!current || current.nodeId === node.id || available.some((item) => item.id === node.id))).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
+        <option value="">Choose a node</option>{document.nodes.filter((node) => node.zoneId !== null && (available.some((item) => item.id === node.id) || current?.nodeId === node.id)).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
       </select></label><button type="submit" disabled={busy || !nodeId}>{current ? 'Save place' : 'Add place'}</button>
       {current && <button type="button" disabled={busy} onClick={() => { setSelected(''); setName(''); setNodeId(''); }}>Cancel edit</button>}
     </form><ErrorMessage error={error} />

@@ -43,13 +43,19 @@ export function addRegularNode(draft: MapDraft, frameId: string, position: Posit
   return next;
 }
 
-export function addEntrance(draft: MapDraft, indoor: Endpoint, outdoor: Endpoint, name: string, meters?: number): MapDraft {
+export function addEntrance(draft: MapDraft, first: Endpoint, second: Endpoint, name: string, meters?: number): MapDraft {
   let work = draft;
-  let inside: MapNode;
-  let outside: MapNode;
-  [work, inside] = endpoint(work, indoor);
-  [work, outside] = endpoint(work, outdoor);
-  if (inside.zoneId === null || outside.zoneId !== null) throw new Error('Entrance endpoints must be indoor then outdoor');
+  let a: MapNode;
+  let b: MapNode;
+  [work, a] = endpoint(work, first);
+  [work, b] = endpoint(work, second);
+  // Either point may be clicked first; which one is indoors is derived from the
+  // resolved node, never from click order.
+  const inside = a.zoneId === null ? b : a;
+  const outside = a.zoneId === null ? a : b;
+  if (inside.zoneId === null || outside.zoneId !== null) {
+    throw new Error('An entrance needs one indoor landing and one outdoor point. Add or pick a node on a building floor and a point outdoors.');
+  }
   const next = connectNodesV5(work, inside.id, outside.id, 'entrance', meters);
   const transition = next.transitions.at(-1)!;
   return parseMapDraft({ ...next, transitions: next.transitions.map((item) => item.id === transition.id ? { ...item, name: name.trim() || item.name } : item) });

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { MapDraft, MapFrame } from './map-contract';
-import { assignBackground, calibrateFrame } from './editor-v3/model';
+import { addBuildingV5, assignBackground, calibrateFrame } from './editor-v3/model';
 import { uploadLayout } from './layout-api';
 import type { LayoutSource } from './pdf-import';
 
@@ -36,6 +36,7 @@ function LayoutImportPanelSession({ venueId, draft, sessionGeneration, commit }:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [replacePending, setReplacePending] = useState(false);
+  const [buildingName, setBuildingName] = useState('');
   const controllerRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<LayoutSource | null>(null);
   const previewImageRef = useRef<HTMLImageElement | null>(null);
@@ -105,8 +106,27 @@ function LayoutImportPanelSession({ venueId, draft, sessionGeneration, commit }:
     }
   }
 
+  function addFirstFloor(event: FormEvent) {
+    event.preventDefault();
+    const bounds = draft.boundary ?? (draft.canvas.kind === 'static'
+      ? { kind: 'local' as const, left: 0, top: 0, right: 1, bottom: 1 }
+      : null);
+    if (!bounds) {
+      setError('Set the map boundary before adding a floor.');
+      return;
+    }
+    setError('');
+    const name = buildingName.trim() || 'Building 1';
+    try {
+      if (!commit('Add floor', (current) => addBuildingV5(current, name, bounds))) throw new Error('Floor was not added.');
+      setBuildingName('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Floor was not added.');
+    }
+  }
+
   async function assignSelectedPage() {
-    const target = draft.frames.find((frame) => frame.id === frameId);
+    const target = draft.frames.find((frame) => frame.id === activeFrameId);
     if (!target || !source || !preview || busy) return;
     const sourceDraft = draft;
     if (target.background && !replacePending) {
@@ -153,7 +173,7 @@ function LayoutImportPanelSession({ venueId, draft, sessionGeneration, commit }:
   const activeFrameId = draft.frames.find((frame) => frame.id === frameId)?.id ??
     draft.frames.find((frame) => !frame.background)?.id ?? draft.frames[0]?.id ?? '';
   const selectedFrame = draft.frames.find((frame) => frame.id === activeFrameId);
-  const previewIsAssigned = previewFrameId === frameId && Boolean(selectedFrame?.background);
+  const previewIsAssigned = previewFrameId === activeFrameId && Boolean(selectedFrame?.background);
   function saveCalibration() {
     if (!selectedFrame || !previewIsAssigned) return;
     setError('');
@@ -192,7 +212,11 @@ function LayoutImportPanelSession({ venueId, draft, sessionGeneration, commit }:
         />
       </label>
       <p className="layout-import-limits">Up to 20 MiB · PDFs up to 20 pages · images up to 4096 px per side</p>
-      {draft.frames.length === 0 && <p className="layout-import-incomplete" role="status">Add a floor before assigning a layout.</p>}
+      {draft.frames.length === 0 && <form className="layout-import-add-floor" onSubmit={addFirstFloor}>
+        <p className="layout-import-incomplete" role="status">Add a floor before assigning a layout.</p>
+        <label>Building name<input value={buildingName} placeholder="Building 1" disabled={busy} onChange={(event) => setBuildingName(event.currentTarget.value)} /></label>
+        <button type="submit" disabled={busy}>Add floor</button>
+      </form>}
 
       {source && <div className="layout-import-controls">
         <p className="layout-import-filename" title={sourceName}>{sourceName} <span>{source.pages} {source.pages === 1 ? 'page' : 'pages'}</span></p>

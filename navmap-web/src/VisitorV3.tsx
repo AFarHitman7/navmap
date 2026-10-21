@@ -1,21 +1,34 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getPublishedVisitorMap } from './api-v3';
+import { getPublicVenueName, getPublishedVisitorMap } from './api-v3';
 import type { MapManifest } from './map-contract';
 import { CanvasHost } from './map/CanvasHost';
 import { shortestPathV3 } from './route-v3';
 import { buildDirections } from '../../shared/src/directions';
 import { useGeolocation } from './location/useGeolocation';
 import { containsPoint } from './geo-v3';
+import { visitorHighlightNode } from './location-view';
 
 export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   const [manifest, setManifest] = useState<MapManifest | null>(null);
-  const [mapName, setMapName] = useState(venueId);
+  const [mapName, setMapName] = useState('');
+  const [publicName, setPublicName] = useState('');
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [start, setStart] = useState('');
   const [destination, setDestination] = useState('');
   const [manualFrameId, setManualFrameId] = useState<string | null>(null);
   const [loadedVenueId, setLoadedVenueId] = useState(venueId);
+
+  // The map name is public even before a version is published, so an
+  // unpublished visitor link shows a human name instead of the raw venue id.
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    getPublicVenueName(venueId, controller.signal).then((name) => {
+      if (active && name) setPublicName(name);
+    });
+    return () => { active = false; controller.abort(); };
+  }, [venueId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -34,6 +47,8 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
 
   const currentManifest = loadedVenueId === venueId ? manifest : null;
   const canvasKind = currentManifest?.canvas.kind ?? 'geographic';
+  const name = mapName || publicName;
+  const title = name ? `Visitor map — ${name}` : 'Visitor map';
   const geo = useGeolocation({ enabled: currentManifest !== null, canvasKind });
   const stopGps = geo.stop;
   // Switching maps or explicitly switching frames cancels any active watch;
@@ -51,7 +66,7 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   const directions = useMemo(() => currentManifest && route ? buildDirections(currentManifest, route) : null, [currentManifest, route]);
 
   if (!currentManifest) return <div className="page-state">
-    <h1>Visitor map — {mapName}</h1>
+    <h1>{title}</h1>
     {error ? <><p className="error" role="alert">{error}</p>
       <button onClick={() => { setError(''); setManifest(null); setAttempt((value) => value + 1); }}>Try again</button></>
       : <p role="status">Loading published map…</p>}
@@ -71,7 +86,15 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   const activeFrame = currentManifest.frames.find((frame) => frame.id === manualFrameId) ?? (manualFrameId ? undefined : followedFrame);
   const visitorChoices = visibleNodes.map((node) => ({ node, label: placeByNodeId.get(node.id)?.name ?? node.name }));
   const chooseFrame = (frameId: string) => setManualFrameId(frameId);
-  const selectedNode = start && graphById.get(start);
+  const highlightedNodeId = visitorHighlightNode(start, destination, (id) => graphById.has(id));
+  // One label per frame: a building floor reads "Building A · Ground", an
+  // outdoor frame reads just "Outdoor" instead of repeating the fallback.
+  const frameLabel = (frame: MapManifest['frames'][number]) => {
+    const zone = currentManifest.indoorZones.find((item) => item.id === frame.zoneId);
+    if (!zone) return 'Outdoor';
+    const floor = zone.floors.find((item) => item.z === frame.z);
+    return `${zone.name} · ${floor?.label ?? `Floor ${frame.z}`}`;
+  };
 
   const boundary = currentManifest.boundary;
   const gpsOutside = geo.location.kind === 'gps' && boundary?.kind === 'geographic'
@@ -101,7 +124,7 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
   return <div className="visitor">
     <div className="workspace-heading"><div>
       <span className="eyebrow">PUBLISHED MAP · VERSION {currentManifest.version}</span>
-      <h1>Visitor map — {mapName}</h1>
+      <h1>{title}</h1>
     </div><p>Choose a starting point and destination.</p></div>
     <div className="visitor-layout">
       <aside className="visitor-sidebar">
@@ -139,12 +162,12 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
           {gpsStatus && <p data-testid="gps-status">{gpsStatus}</p>}
         </div>}
         <div className="visitor-frame-picker" aria-label="Map layers">
-          <span className="layer-current-frame" aria-live="polite">{activeFrame ? `${currentManifest.indoorZones.find((zone) => zone.id === activeFrame.zoneId)?.name ?? 'Outdoor'} · ${currentManifest.indoorZones.find((zone) => zone.id === activeFrame.zoneId)?.floors.find((floor) => floor.z === activeFrame.z)?.label ?? 'Outdoor'}` : 'Choose a floor'}</span>
+          <span className="layer-current-frame" aria-live="polite">{activeFrame ? frameLabel(activeFrame) : 'Choose a floor'}</span>
           <label>Manual floor
             <select aria-label="Manual floor selection" value={manualFrameId ?? ''} onChange={(event) => setManualFrameId(event.target.value || null)}>
               <option value="">Follow location</option>
               {currentManifest.frames.map((frame) => <option key={frame.id} value={frame.id}>
-                {currentManifest.indoorZones.find((zone) => zone.id === frame.zoneId)?.name ?? 'Outdoor'} · {currentManifest.indoorZones.find((zone) => zone.id === frame.zoneId)?.floors.find((floor) => floor.z === frame.z)?.label ?? 'Outdoor'}{!frame.background && currentManifest.canvas.kind === 'static' ? ' · no plan' : ''}
+                {frameLabel(frame)}{!frame.background && currentManifest.canvas.kind === 'static' ? ' · no plan' : ''}
               </option>)}
             </select>
           </label>
@@ -152,7 +175,7 @@ export function VisitorV3({ venueId = 'demo' }: { venueId?: string }) {
         {manualFrameId && <button type="button" className="text-button" onClick={() => setManualFrameId(null)}>Resume follow</button>}
         <div className="map-frame">
           {activeFrame && <CanvasHost document={currentManifest} activeFrameId={activeFrame.id} mode="navigate" view="visitor"
-            callbacks={{}} gpsDot={gpsDot} selection={selectedNode ? { kind: 'node', id: selectedNode.id } : { kind: 'none' }} />}
+            callbacks={{}} gpsDot={gpsDot} selection={highlightedNodeId ? { kind: 'node', id: highlightedNodeId } : { kind: 'none' }} />}
         </div>
         {start && <div className="visitor-location" aria-label="Current location">
           Starting from {startNode?.generated && !placeByNodeId.has(start) ? 'Known location' : locationLabel(start)}

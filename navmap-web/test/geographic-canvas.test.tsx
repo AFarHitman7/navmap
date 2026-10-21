@@ -3,10 +3,28 @@ import L from 'leaflet';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CanvasHost } from '../src/map/CanvasHost';
 import { geographicDraft } from '../src/fixtures/map-v5';
+import { parseMapDraft } from '../src/map-contract';
 
 afterEach(() => vi.restoreAllMocks());
 
 describe('GeographicCanvas presentation', () => {
+  it('renders a navigable basemap before any frame or boundary is authored', async () => {
+    const blank = parseMapDraft({
+      schemaVersion: 5, venueId: 'blank-geo', canvas: { kind: 'geographic' }, boundary: null,
+      indoorZones: [], frames: [], nodes: [], edges: [], paths: [], transitions: [], places: [], anchors: [], aps: [],
+    });
+    const mapSpy = vi.spyOn(L, 'map');
+    const { container } = render(<CanvasHost document={blank} view="editor" activeFrameId="" mode="select" callbacks={{}} />);
+    await waitFor(() => expect(mapSpy).toHaveBeenCalled());
+    const map = mapSpy.mock.results[0]!.value as L.Map;
+    // A world view means the OSM tile layer actually requests and renders tiles
+    // instead of leaving the canvas blank with no center.
+    expect(map.getZoom()).toBe(2);
+    expect(map.getCenter().lat).toBeCloseTo(20);
+    await waitFor(() => expect(container.querySelector('.map-canvas')?.getAttribute('data-zoom')).toBe('2'));
+    expect(container.querySelector('.leaflet-tile-pane')).not.toBeNull();
+  });
+
   it('hides generated markers, draws the full path as one polyline, and supports whole-path selection', async () => {
     const draft = geographicDraft();
     const markers = vi.spyOn(L, 'marker');

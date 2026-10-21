@@ -49,7 +49,10 @@ function BuildingInspectorForm({ document, selection, commit, busy, onSelectionC
       <form onSubmit={saveName}><label>Building name<input required value={name} disabled={busy} onChange={(event) => setName(event.currentTarget.value)} /></label><button type="submit" disabled={busy}>Save name</button></form>
       <ul className="v5-floor-list" aria-label="Building floors">{selected.floors.map((floor) => <li key={floor.z}>
         <label>Floor {floor.z}<input aria-label={`Floor ${floor.z} label`} value={floorLabels[floor.z] ?? floor.label} disabled={busy}
-          onChange={(event) => setFloorLabels((current) => ({ ...current, [floor.z]: event.currentTarget.value }))}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setFloorLabels((current) => ({ ...current, [floor.z]: value }));
+          }}
           onBlur={(event) => {
             const nextLabel = event.currentTarget.value.trim();
             if (!nextLabel) { setError('Floor label is required.'); return; }
@@ -68,7 +71,10 @@ function BuildingInspectorForm({ document, selection, commit, busy, onSelectionC
       </button>)}
       <form onSubmit={addBuilding}><h3>Add building</h3><label>Building name<input required value={newName} disabled={busy} onChange={(event) => setNewName(event.currentTarget.value)} /></label>
         <div className="v5-coordinate-grid">{fields.map((field) => <label key={field}>{field[0]!.toUpperCase() + field.slice(1)}<input type="number" step="any" required value={bounds[field] ?? ''} disabled={busy}
-          onChange={(event) => setBounds((current) => ({ ...current, [field]: event.currentTarget.value }))} /></label>)}</div>
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setBounds((current) => ({ ...current, [field]: value }));
+          }} /></label>)}</div>
         <button type="submit" disabled={busy}>Add building</button>
       </form>
     </>}

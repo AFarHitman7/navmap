@@ -31,7 +31,10 @@ function BoundaryForm({ document, commit, busy, activeFrameId, boundary, fields 
     <form onSubmit={save}>
       <div className="v5-coordinate-grid">{fields.map((field) => <label key={field}>{field[0]!.toUpperCase() + field.slice(1)}
         <input type="number" step="any" required value={values[field] ?? ''} aria-label={field[0]!.toUpperCase() + field.slice(1)}
-          disabled={busy} onChange={(event) => setValues((current) => ({ ...current, [field]: event.currentTarget.value }))} />
+          disabled={busy} onChange={(event) => {
+            const value = event.currentTarget.value;
+            setValues((current) => ({ ...current, [field]: value }));
+          }} />
       </label>)}</div>
       <button className="primary" type="submit" disabled={busy}>Save boundary</button>
     </form>

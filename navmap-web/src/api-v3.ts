@@ -40,6 +40,13 @@ function throwRevisionConflictIfPresent(res: Response, body: unknown): void {
   );
 }
 
+/**
+ * Fired on `window` after a successful organizer sign-in so chrome that loads
+ * admin data in its own effect (the header map picker) can refresh without a
+ * full page reload. Sign-in itself only reloads the editor's own document.
+ */
+export const AUTH_CHANGED_EVENT = 'navmap:auth-changed';
+
 export async function login(password: string): Promise<void> {
   const res = await fetch('/api/admin/login', {
     method: 'POST',
@@ -47,6 +54,7 @@ export async function login(password: string): Promise<void> {
     body: JSON.stringify({ password }),
   });
   if (!res.ok) throwForStatus(res, await readJson(res));
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
 async function readJson(res: Response): Promise<unknown> {
@@ -191,6 +199,24 @@ export async function isV5AuthoringEnabled(): Promise<boolean> {
     return (await getCapabilities()).mapV5AuthoringEnabled;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Public, unauthenticated map name for a venue regardless of publication state.
+ * Visitors can open a map whose draft has not been published yet; the heading
+ * should still read a human name instead of the raw venue id. Returns null when
+ * the name is unavailable so callers can fall back rather than show the id.
+ */
+export async function getPublicVenueName(venueId: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/venues/${encodeURIComponent(venueId)}`, { signal });
+    if (!res.ok) return null;
+    const body = await readJson(res);
+    const name = typeof body === 'object' && body !== null && 'name' in body ? (body as { name: unknown }).name : undefined;
+    return typeof name === 'string' && name.trim() ? name : null;
+  } catch {
+    return null;
   }
 }
 
